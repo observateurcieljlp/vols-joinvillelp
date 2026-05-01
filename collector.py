@@ -58,13 +58,17 @@ def get_real_flight_info(icao24, fr24_flights):
     return dep, arr, h_dep, h_arr, make, model, reg
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--test-mode", action="store_true", help="Enrich metadata for all aircraft regardless of altitude")
+    args = parser.parse_args()
+    
     print("--- Scan Joinville (Hybride OpenSky/FR24) ---")
     try:
         USER = st.secrets["OPENSKY_USER"].lower()
         PWD = st.secrets["OPENSKY_PWD"]
         
         url = f"https://opensky-network.org/api/states/all?lamin={BBOX['lamin']}&lomin={BBOX['lomin']}&lamax={BBOX['lamax']}&lomax={BBOX['lomax']}"
-        # Utilisation de la session avec retry et timeout augmenté
         response = session.get(url, auth=(USER, PWD), timeout=30)
         
         if response.status_code == 200:
@@ -77,14 +81,18 @@ def main():
                 au_sol = avion[8]
                 callsign = str(avion[1]).strip() or "Inconnu"
                 
-                if not au_sol and altitude < ALTITUDE_MAX:
-                    print(f"  [Candidat] {callsign} ({int(altitude)}m) - Éligible")
+                # En mode test, on force l'enrichissement (altitude check ignoré)
+                if args.test_mode or (not au_sol and altitude < ALTITUDE_MAX):
+                    if args.test_mode:
+                        print(f"  [TEST] {callsign} ({int(altitude)}m) - Enrichissement forcé")
+                    else:
+                        print(f"  [Candidat] {callsign} ({int(altitude)}m) - Éligible")
                     vols_potitiels.append(avion)
                 else:
                     print(f"  [Ignoré] {callsign} ({int(altitude)}m) - Trop haut ou au sol")
 
             if not vols_potitiels:
-                print("Aucun vol ne correspond aux critères de basse altitude.")
+                print("Aucun vol éligible.")
                 return
 
             # Lecture du cache GSheets + Migration schéma
