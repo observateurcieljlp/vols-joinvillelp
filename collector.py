@@ -69,9 +69,23 @@ def main():
         
         if response.status_code == 200:
             states = response.json().get('states') or []
-            vols_potitiels = [s for s in states if not s[8] and (s[13] or s[7] or 0) < ALTITUDE_MAX]
+            print(f"--- Analyse des {len(states)} avions détectés ---")
+            
+            vols_potitiels = []
+            for avion in states:
+                altitude = avion[13] or avion[7] or 0
+                au_sol = avion[8]
+                callsign = str(avion[1]).strip() or "Inconnu"
+                
+                if not au_sol and altitude < ALTITUDE_MAX:
+                    print(f"  [Candidat] {callsign} ({int(altitude)}m) - Éligible")
+                    vols_potitiels.append(avion)
+                else:
+                    print(f"  [Ignoré] {callsign} ({int(altitude)}m) - Trop haut ou au sol")
 
-            if not vols_potitiels: return
+            if not vols_potitiels:
+                print("Aucun vol ne correspond aux critères de basse altitude.")
+                return
 
             # Lecture du cache GSheets + Migration schéma
             conn = st.connection("gsheets", type=GSheetsConnection)
