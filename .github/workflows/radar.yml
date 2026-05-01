@@ -25,7 +25,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: aircraft_db.parquet
-          key: aircraft-db-${{ github.run_id }}
+          key: aircraft-db-v1
           restore-keys: |
             aircraft-db-
 
