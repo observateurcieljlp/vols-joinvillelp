@@ -147,15 +147,17 @@ def main():
                     "Heure": now.strftime("%H:%M"),
                     "Avion": callsign,
                     "icao24": icao24,
-                    "Altitude": int(altitude),
+                    "Altitude (m)": int(altitude),
                     "De": dep,
                     "A": arr,
                     "Dep_H": h_dep,
-                    "Arr_H": h_arr
+                    "Arr_H": h_arr,
+                    "Source": "FR24" if dep != "Inconnu" else "OpenSky (Live)"
                 })
 
             if nouveaux_vols:
-                df_nouveaux = pd.DataFrame(nouveaux_vols, columns=cols)
+                df_nouveaux = pd.DataFrame(nouveaux_vols)
+                cols = ["Date", "Heure", "Avion", "icao24", "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source"]
                 df_final = pd.concat([df_existant, df_nouveaux], ignore_index=True)
                 # Sécurité supplémentaire contre les doublons exacts
                 df_final = df_final.drop_duplicates(subset=['Date', 'Heure', 'Avion'], keep='last')

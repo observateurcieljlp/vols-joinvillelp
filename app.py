@@ -41,6 +41,10 @@ try:
         
         st.metric(f"Avions détectés le {jour_choisi}", len(df_jour))
         
+        # Formatage optionnel : s'assurer que l'altitude est affichée sans virgule
+        if 'Altitude (m)' in df_jour.columns:
+            df_jour['Altitude (m)'] = df_jour['Altitude (m)'].astype(int)
+        
         # Affichage du tableau propre
         st.dataframe(df_jour, use_container_width=True)
 

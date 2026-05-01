@@ -92,9 +92,11 @@ def main():
             
             if dep and dep != "Inconnu":
                 df.at[idx, 'De'] = dep
+                df.at[idx, 'Source'] = "OpenSky (J+1)"
                 success_count += 1
             if arr and arr != "Inconnu":
                 df.at[idx, 'A'] = arr
+                df.at[idx, 'Source'] = "OpenSky (J+1)"
                 success_count += 1
                 
             time.sleep(1) # Respecter le rate limit OpenSky
