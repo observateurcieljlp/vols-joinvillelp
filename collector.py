@@ -101,6 +101,7 @@ def main():
                     "Date": datetime.now().strftime("%d/%m/%Y"),
                     "Heure": datetime.now().strftime("%H:%M"),
                     "Avion": callsign,
+                    "icao24": icao24,
                     "Altitude": int(altitude),
                     "De": dep,
                     "A": arr,
@@ -111,7 +112,7 @@ def main():
 
             if nouveaux_vols:
                 conn = st.connection("gsheets", type=GSheetsConnection)
-                cols = ["Date", "Heure", "Avion", "Altitude", "De", "A", "Dep_H", "Arr_H"]
+                cols = ["Date", "Heure", "Avion", "icao24", "Altitude", "De", "A", "Dep_H", "Arr_H"]
                 
                 try:
                     df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
