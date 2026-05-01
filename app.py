@@ -8,7 +8,16 @@ st.title("✈️ Radar des nuisances - Joinville-le-Pont")
 st.markdown("Ce tableau de bord affiche les survols enregistrés automatiquement par notre radar permanent.")
 
 # Connexion au Google Sheet
-conn = st.connection("gsheets", type=GSheetsConnection)
+try:
+    if "connections" not in st.secrets or "gsheets" not in st.secrets.connections:
+        st.error("❌ Configuration Google Sheets manquante dans les Secrets Streamlit.")
+        st.info("Assurez-vous d'avoir ajouté le bloc [connections.gsheets] dans les secrets de votre application Streamlit Cloud.")
+        st.stop()
+        
+    conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+    st.error(f"Erreur d'initialisation de la connexion : {e}")
+    st.stop()
 
 try:
     # Lecture des données enregistrées par le bot GitHub
