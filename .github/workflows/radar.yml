@@ -25,9 +25,10 @@ jobs:
         run: |
           mkdir -p .streamlit
           echo "OPENSKY_USER = '${{ secrets.OPENSKY_USER }}'" > .streamlit/secrets.toml
-          echo "OPENSKY_PWD = '${{ secrets.OPENSKY_PWD }}'" >> .streamlit/secrets.toml
-          echo "[connections.gsheets]" >> .streamlit/secrets.toml
-          echo "spreadsheet = '${{ secrets.GSHEETS_URL }}'" >> .streamlit/secrets.toml
+          # Utilisation de doubles quotes pour le mot de passe au cas où il contient des caractères spéciaux
+          echo 'OPENSKY_PWD = "${{ secrets.OPENSKY_PWD }}"' >> .streamlit/secrets.toml
+          # Injection du bloc complet de connexion GSheets
+          echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" >> .streamlit/secrets.toml
 
       - name: Lancement du Radar
         run: python collector.py
