@@ -1,4 +1,5 @@
 streamlit
 pandas
-trino
 st-gsheets-connection
+FlightRadarAPI
+beautifulsoup4

@@ -1,0 +1,33 @@
+name: Radar Joinville-le-Pont
+
+on:
+  schedule:
+    - cron: '*/2 * * * *' # Tourne toutes les 2 minutes
+  workflow_dispatch: # Permet de le lancer manuellement avec un bouton
+
+jobs:
+  surveillance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v3
+
+      - name: Configuration de Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installation des dépendances
+        run: |
+          pip install -r requirements.txt
+
+      - name: Création du fichier de Secrets
+        run: |
+          mkdir -p .streamlit
+          echo "OPENSKY_USER = '${{ secrets.OPENSKY_USER }}'" > .streamlit/secrets.toml
+          echo "OPENSKY_PWD = '${{ secrets.OPENSKY_PWD }}'" >> .streamlit/secrets.toml
+          echo "[connections.gsheets]" >> .streamlit/secrets.toml
+          echo "spreadsheet = '${{ secrets.GSHEETS_URL }}'" >> .streamlit/secrets.toml
+
+      - name: Lancement du Radar
+        run: python collector.py
