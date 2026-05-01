@@ -25,7 +25,7 @@ def get_fr24_flights_in_area():
         return []
 
 def get_real_flight_info(icao24, fr24_flights):
-    """Va chercher les vrais aéroports sur FlightRadar24 en croisant avec les vols déjà récupérés"""
+    """Va chercher les infos complètes sur FlightRadar24"""
     try:
         # On cherche le vol correspondant à l'ICAO24 dans notre liste FR24
         flight = next((f for f in fr24_flights if f.icao_24bit and f.icao_24bit.lower() == icao24.lower()), None)
@@ -37,10 +37,18 @@ def get_real_flight_info(icao24, fr24_flights):
             origin = flight.origin_airport_iata if flight.origin_airport_iata != "N/A" else "Inconnu"
             dest = flight.destination_airport_iata if flight.destination_airport_iata != "N/A" else "Inconnu"
             
-            # Récupération des horaires (si disponibles dans les détails)
+            # Métadonnées de l'appareil et de la compagnie
+            airline = "Inconnu"
+            registration = flight.registration if flight.registration != "N/A" else "Inconnu"
+            model = "Inconnu"
+
+            if details:
+                airline = details.get('airline', {}).get('name', "Inconnu")
+                model = details.get('aircraft', {}).get('model', {}).get('text', "Inconnu")
+            
+            # Récupération des horaires
             h_dep = "--:--"
             h_arr = "--:--"
-            
             if details and 'time' in details:
                 time_info = details.get('time', {})
                 if time_info.get('real', {}).get('departure'):
@@ -48,11 +56,11 @@ def get_real_flight_info(icao24, fr24_flights):
                 if time_info.get('estimated', {}).get('arrival'):
                     h_arr = datetime.fromtimestamp(time_info['estimated']['arrival']).strftime('%H:%M')
             
-            return origin, dest, h_dep, h_arr
+            return origin, dest, h_dep, h_arr, airline, registration, model
     except Exception as e:
         print(f"  [Info] Erreur enrichment pour {icao24}: {e}")
     
-    return "Inconnu", "Inconnu", "--:--", "--:--"
+    return "Inconnu", "Inconnu", "--:--", "--:--", "Inconnu", "Inconnu", "Inconnu"
 
 def main():
     print("--- Scan Joinville (Source Hybride : OpenSky + FlightRadar24) ---")
@@ -85,7 +93,7 @@ def main():
 
             # 2. Lecture du cache GSheets AVANT d'appeler FR24 pour éviter les doublons d'appels
             conn = st.connection("gsheets", type=GSheetsConnection)
-            cols = ["Date", "Heure", "Identifiant Vol (Callsign)", "Identifiant Appareil (ICAO24)", "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source"]
+            cols = ["Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie", "Modèle Avion", "Immatriculation", "Identifiant Appareil (ICAO24)", "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source"]
             try:
                 df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
                 # S'assurer que les colonnes indispensables sont là (gestion de l'ancien format)
@@ -93,9 +101,16 @@ def main():
                     # On tente de mapper les anciennes colonnes si elles existent
                     rename_map = {"Avion": "Identifiant Vol (Callsign)", "icao24": "Identifiant Appareil (ICAO24)", "Altitude": "Altitude (m)"}
                     df_existant = df_existant.rename(columns=rename_map)
-                    # On ne garde que les colonnes finales
-                    df_existant = df_existant[[c for c in cols if c in df_existant.columns]]
+                    # On s'assure que toutes les nouvelles colonnes existent
+                    for c in cols:
+                        if c not in df_existant.columns:
+                            df_existant[c] = "Inconnu"
+                    df_existant = df_existant[cols]
                 else:
+                    # S'assurer que l'ordre et la présence des colonnes est correcte
+                    for c in cols:
+                        if c not in df_existant.columns:
+                            df_existant[c] = "Inconnu"
                     df_existant = df_existant[cols]
             except:
                 df_existant = pd.DataFrame(columns=cols)
@@ -143,12 +158,15 @@ def main():
                 altitude = avion[13] or avion[7] or 0
 
                 print(f"✈️ Nouveau passage : {callsign} ({int(altitude)}m). Enrichissement...")
-                dep, arr, h_dep, h_arr = get_real_flight_info(icao24, fr24_flights)
+                dep, arr, h_dep, h_arr, airline, reg, model = get_real_flight_info(icao24, fr24_flights)
 
                 nouveaux_vols.append({
                     "Date": now.strftime("%d/%m/%Y"),
                     "Heure": now.strftime("%H:%M"),
                     "Identifiant Vol (Callsign)": callsign,
+                    "Compagnie": airline,
+                    "Modèle Avion": model,
+                    "Immatriculation": reg,
                     "Identifiant Appareil (ICAO24)": icao24,
                     "Altitude (m)": int(altitude),
                     "De": dep,
