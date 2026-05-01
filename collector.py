@@ -81,25 +81,70 @@ def main():
                 print(f"Aucun des {len(states)} avions détectés n'est en basse altitude (< {ALTITUDE_MAX}m).")
                 return
 
-            print(f"Détection de {len(vols_potitiels)} avions en basse altitude. Enrichissement via FlightRadar24...")
+            print(f"Détection de {len(vols_potitiels)} avions en basse altitude. Vérification du cache...")
 
-            # 2. On n'appelle FR24 que si on a des candidats valides
+            # 2. Lecture du cache GSheets AVANT d'appeler FR24 pour éviter les doublons d'appels
+            conn = st.connection("gsheets", type=GSheetsConnection)
+            cols = ["Date", "Heure", "Avion", "icao24", "Altitude", "De", "A", "Dep_H", "Arr_H"]
+            try:
+                df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
+                # S'assurer que les colonnes indispensables sont là
+                if "icao24" not in df_existant.columns:
+                    df_existant = pd.DataFrame(columns=cols)
+                else:
+                    df_existant = df_existant[cols]
+            except:
+                df_existant = pd.DataFrame(columns=cols)
+
+            # 3. Filtrage des avions déjà traités récemment (< 15 min)
+            vols_a_enrichir = []
+            now = datetime.now()
+            for avion in vols_potitiels:
+                icao24 = avion[0]
+                callsign = str(avion[1]).strip() if avion[1] else "Inconnu"
+                
+                # Vérifier si cet icao24 est déjà dans les 15 dernières minutes
+                deja_vu = False
+                if not df_existant.empty:
+                    # On filtre sur le même jour et le même icao24
+                    today_str = now.strftime("%d/%m/%Y")
+                    match_icao = df_existant[(df_existant['icao24'] == icao24) & (df_existant['Date'] == today_str)]
+                    
+                    for _, row in match_icao.iterrows():
+                        try:
+                            heure_v = datetime.strptime(row['Heure'], "%H:%M")
+                            heure_now = datetime.strptime(now.strftime("%H:%M"), "%H:%M")
+                            diff_min = abs((heure_now - heure_v).total_seconds() / 60)
+                            if diff_min < 15: # Si vu il y a moins de 15 minutes, on ignore
+                                deja_vu = True
+                                break
+                        except: pass
+                
+                if not deja_vu:
+                    vols_a_enrichir.append(avion)
+                else:
+                    print(f"  [Skip] {callsign} ({icao24}) déjà enregistré récemment.")
+
+            if not vols_a_enrichir:
+                print("Tous les avions détectés ont déjà été traités récemment.")
+                return
+
+            # 4. On n'appelle FR24 que pour les nouveaux
+            print(f"Enrichissement de {len(vols_a_enrichir)} nouveaux passages via FlightRadar24...")
             fr24_flights = get_fr24_flights_in_area()
 
             nouveaux_vols = []
-            for avion in vols_potitiels:
+            for avion in vols_a_enrichir:
                 icao24 = avion[0]
                 callsign = str(avion[1]).strip() if avion[1] else "Inconnu"
                 altitude = avion[13] or avion[7] or 0
 
-                print(f"✈️ Enrichissement de {callsign} ({int(altitude)}m)...")
-
-                # On croise les données OpenSky avec FR24 pour avoir les aéroports
+                print(f"✈️ Nouveau passage : {callsign} ({int(altitude)}m). Enrichissement...")
                 dep, arr, h_dep, h_arr = get_real_flight_info(icao24, fr24_flights)
 
                 nouveaux_vols.append({
-                    "Date": datetime.now().strftime("%d/%m/%Y"),
-                    "Heure": datetime.now().strftime("%H:%M"),
+                    "Date": now.strftime("%d/%m/%Y"),
+                    "Heure": now.strftime("%H:%M"),
                     "Avion": callsign,
                     "icao24": icao24,
                     "Altitude": int(altitude),
@@ -109,27 +154,14 @@ def main():
                     "Arr_H": h_arr
                 })
 
-
             if nouveaux_vols:
-                conn = st.connection("gsheets", type=GSheetsConnection)
-                cols = ["Date", "Heure", "Avion", "icao24", "Altitude", "De", "A", "Dep_H", "Arr_H"]
-                
-                try:
-                    df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
-                    # S'assurer que toutes les colonnes existent
-                    for col in cols:
-                        if col not in df_existant.columns:
-                            df_existant[col] = ""
-                    df_existant = df_existant[cols] 
-                except:
-                    df_existant = pd.DataFrame(columns=cols)
-
                 df_nouveaux = pd.DataFrame(nouveaux_vols, columns=cols)
                 df_final = pd.concat([df_existant, df_nouveaux], ignore_index=True)
+                # Sécurité supplémentaire contre les doublons exacts
                 df_final = df_final.drop_duplicates(subset=['Date', 'Heure', 'Avion'], keep='last')
                 
                 conn.update(worksheet="Vols_Joinville", data=df_final.fillna("").tail(2000))
-                print(f"Succès : {len(nouveaux_vols)} vols enregistrés dans Google Sheets.")
+                print(f"Succès : {len(nouveaux_vols)} nouveaux passages enregistrés.")
             else:
                 print("Aucun avion ne correspond aux critères (altitude < 3500m).")
         else:
