@@ -1,35 +1,22 @@
 import requests
 import pandas as pd
+import os
 from datetime import datetime
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from FlightRadar24 import FlightRadar24API
+from utils_aircraft import refresh_aircraft_db, get_aircraft_info
 
 # Suppression du warning Pandas futur
 pd.set_option('future.no_silent_downcasting', True)
 
-# Initialisation de l'API FlightRadar24 (version gratuite)
+# Initialisation de l'API FlightRadar24
 fr_api = FlightRadar24API()
-
-# Chargement base locale OpenSky (statique)
-try:
-    AIRCRAFT_DB = pd.read_csv("https://opensky-network.org/datasets/metadata/aircraftDatabase.csv", low_memory=False)
-    # On indexe sur icao24 pour recherche rapide
-    AIRCRAFT_DB = AIRCRAFT_DB.set_index('icao24')
-except:
-    AIRCRAFT_DB = pd.DataFrame()
+refresh_aircraft_db()
 
 # BBOX Joinville resserrée
 BBOX = {"lamin": 48.75, "lamax": 48.90, "lomin": 2.35, "lomax": 2.60}
 ALTITUDE_MAX = 3500 
-
-def get_aircraft_info(icao24):
-    """Récupère infos avion depuis la base OpenSky statique"""
-    icao_hex = icao24.upper()
-    if icao_hex in AIRCRAFT_DB.index:
-        row = AIRCRAFT_DB.loc[icao_hex]
-        return row.get('manufacturerName', "Inconnu"), row.get('model', "Inconnu"), row.get('registration', "Inconnu")
-    return "Inconnu", "Inconnu", "Inconnu"
 
 def get_fr24_flights_in_area():
     """Récupère tous les vols FR24 dans la zone pour croisement"""
@@ -40,10 +27,12 @@ def get_fr24_flights_in_area():
         return []
 
 def get_real_flight_info(icao24, fr24_flights):
-    """Enrichissement hybride : FR24 + Base OpenSky"""
-    dep, arr, h_dep, h_arr = "Inconnu", "Inconnu", "--:--", "--:--"
+    """Enrichissement hybride : Base OpenSky (Priorité) + FR24 (Fallback)"""
+    # 1. Infos Avion via Base OpenSky (Priorité et Stable)
+    make, model, reg = get_aircraft_info(icao24)
     
-    # 1. Infos FR24 (Live)
+    # 2. Infos Vols via FR24 (Live)
+    dep, arr, h_dep, h_arr = "Inconnu", "Inconnu", "--:--", "--:--"
     try:
         flight = next((f for f in fr24_flights if f.icao_24bit and f.icao_24bit.lower() == icao24.lower()), None)
         if flight:
@@ -56,9 +45,6 @@ def get_real_flight_info(icao24, fr24_flights):
                 if time_info.get('real', {}).get('departure'): h_dep = datetime.fromtimestamp(time_info['real']['departure']).strftime('%H:%M')
                 if time_info.get('estimated', {}).get('arrival'): h_arr = datetime.fromtimestamp(time_info['estimated']['arrival']).strftime('%H:%M')
     except: pass
-
-    # 2. Infos Avion via Base OpenSky (Statique, aucun risque de blocage)
-    make, model, reg = get_aircraft_info(icao24)
     
     return dep, arr, h_dep, h_arr, make, model, reg
 
@@ -138,3 +124,13 @@ def main():
                 df_final = pd.concat([df_existant, df_nouveaux], ignore_index=True)
                 df_final = df_final.drop_duplicates(subset=['Date', 'Heure', 'Identifiant Vol (Callsign)'], keep='last')
                 conn.update(worksheet="Vols_Joinville", data=df_final.fillna("").tail(2000))
+                print(f"Succès : {len(nouveaux_vols)} nouveaux passages enregistrés.")
+        else:
+            print(f"Erreur OpenSky : {response.status_code}")
+    except Exception as e:
+        print(f"Erreur : {e}")
+        import traceback
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
