@@ -50,6 +50,74 @@ def get_route_hexdb(callsign: str) -> tuple[str, str] | None:
     return None
 
 
+def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str]:
+    """
+    Interroge hexdb.io /api/v1/aircraft/{hex} pour obtenir les infos appareil.
+
+    Mapping :
+      RegisteredOwners → compagnie
+      Type             → modèle   (ex: "A320 232SL")
+      Registration     → immat    (ex: "EC-MEL")
+
+    Retourne (compagnie, modele, immat) — chaînes vides si non trouvé.
+    """
+    try:
+        r = requests.get(
+            f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}",
+            timeout=5
+        )
+        if r.status_code == 200:
+            d = r.json()
+            compagnie = d.get("RegisteredOwners", "")
+            modele    = d.get("Type", "")
+            immat     = d.get("Registration", "")
+            return compagnie, modele, immat
+    except Exception:
+        pass
+    return "", "", ""
+
+
+# ─── hexdb.io : résolution nom d'aéroport (avec cache) ───────────────────────
+
+_airport_cache: dict[str, str] = {}
+
+def resolve_airport(code: str) -> str:
+    """
+    Résout un code aéroport (ICAO 4 lettres ou IATA 3 lettres) en nom lisible.
+    Format retourné : "Barcelone-El Prat (LEBL)"
+    Résultats mis en cache pour éviter les appels répétés.
+    Retourne le code brut si l'aéroport est introuvable.
+    """
+    code = code.strip().upper()
+    if not code or code in ("Inconnu", "?"):
+        return code
+
+    if code in _airport_cache:
+        return _airport_cache[code]
+
+    try:
+        # ICAO = 4 caractères, IATA = 3 caractères
+        if len(code) == 4:
+            endpoint = f"https://hexdb.io/api/v1/airport/icao/{code}"
+        else:
+            endpoint = f"https://hexdb.io/api/v1/airport/iata/{code}"
+
+        r = requests.get(endpoint, timeout=5)
+        if r.status_code == 200:
+            nom = r.json().get("airport", "").strip()
+            # Nettoyage des suffixes verbeux anglais pour un rendu plus court
+            for suffixe in (" Airport", " International Airport", " Intl", " International"):
+                nom = nom.replace(suffixe, "")
+            result = f"{nom} ({code})" if nom else code
+            _airport_cache[code] = result
+            return result
+    except Exception:
+        pass
+
+    _airport_cache[code] = code   # on met en cache l'échec aussi
+    return code
+
+
 # ─── FR24 : fallback si hexdb ne trouve rien ──────────────────────────────────
 
 def get_fr24_flights_in_area():
@@ -138,7 +206,7 @@ def main():
         cols = [
             "Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie",
             "Modèle Avion", "Immatriculation", "Identifiant Appareil (ICAO24)",
-            "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source",
+            "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source", "Planespotters",
         ]
         try:
             df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
@@ -207,8 +275,13 @@ def main():
 
             print(f"\n  ✈️  {callsign} ({icao24}) — {int(altitude)} m")
 
-            # ── Infos appareil (toujours) ──────────────────────────────────
-            make, model, reg = get_aircraft_info(icao24)
+            # ── Infos appareil : hexdb en priorité, utils_aircraft en fallback ──
+            make, model, reg = get_aircraft_hexdb(icao24)
+            if any([make, model, reg]):
+                print(f"    aircraft hexdb ✅  {make} / {model} / {reg}")
+            else:
+                make, model, reg = get_aircraft_info(icao24)
+                print(f"    aircraft hexdb ❌  → fallback OpenSky DB")
 
             # ── Route : hexdb en priorité, FR24 en fallback ────────────────
             hexdb_result = get_route_hexdb(callsign)
@@ -218,10 +291,24 @@ def main():
                 source       = "hexdb"
                 print(f"    hexdb ✅  {dep} → {arr}")
             else:
-                # FR24 chargé en lazy : un seul appel groupé pour tous les fallbacks
-                print(f"    hexdb ❌  → appel FR24...")
-                dep, arr, h_dep, h_arr = get_route_fr24(icao24, get_fr24_lazy())
-                source = "FR24" if dep != "Inconnu" else "OpenSky (Live)"
+                # FR24 bloqué si l'avion est au-dessus de l'altitude max,
+                # y compris en test-mode (inutile de l'appeler pour un croiseur en route)
+                if altitude >= ALTITUDE_MAX:
+                    print(f"    hexdb ❌  + altitude {int(altitude)} m ≥ {ALTITUDE_MAX} m → FR24 ignoré")
+                    dep, arr, h_dep, h_arr = "Inconnu", "Inconnu", "--:--", "--:--"
+                    source = "OpenSky (Live)"
+                else:
+                    # FR24 chargé en lazy : un seul appel groupé pour tous les fallbacks
+                    print(f"    hexdb ❌  → appel FR24...")
+                    dep, arr, h_dep, h_arr = get_route_fr24(icao24, get_fr24_lazy())
+                    source = "FR24" if dep != "Inconnu" else "OpenSky (Live)"
+
+            # ── Résolution des noms d'aéroports ───────────────────────────
+            dep_label = resolve_airport(dep)
+            arr_label = resolve_airport(arr)
+
+            # ── Lien Planespotters (formule Google Sheets) ────────────────
+            lien_ps = f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")'
 
             nouveaux_vols.append({
                 "Date":                          now.strftime("%d/%m/%Y"),
@@ -232,11 +319,12 @@ def main():
                 "Immatriculation":               reg,
                 "Identifiant Appareil (ICAO24)": icao24,
                 "Altitude (m)":                  int(altitude),
-                "De":                            dep,
-                "A":                             arr,
+                "De":                            dep_label,
+                "A":                             arr_label,
                 "Dep_H":                         h_dep,
                 "Arr_H":                         h_arr,
                 "Source":                        source,
+                "Planespotters":                 lien_ps,
             })
 
         # ── Sauvegarde ─────────────────────────────────────────────────────
