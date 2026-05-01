@@ -2,7 +2,9 @@ name: Radar Joinville-le-Pont
 
 on:
   schedule:
-    - cron: '*/2 * * * *' # Tourne toutes les 2 minutes
+    - cron: '*/2 * * * *' # Toutes les 2 minutes
+  workflow_dispatch: # Permet le lancement manuel
+
   workflow_dispatch: # Permet de le lancer manuellement avec un bouton
 
 jobs:
