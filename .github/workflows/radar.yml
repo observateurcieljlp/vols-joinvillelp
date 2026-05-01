@@ -32,11 +32,13 @@ jobs:
       - name: Création du fichier de Secrets
         run: |
           mkdir -p .streamlit
-          echo "OPENSKY_USER = '${{ secrets.OPENSKY_USER }}'" > .streamlit/secrets.toml
-          # Utilisation de doubles quotes pour le mot de passe au cas où il contient des caractères spéciaux
-          echo 'OPENSKY_PWD = "${{ secrets.OPENSKY_PWD }}"' >> .streamlit/secrets.toml
-          # Injection du bloc complet de connexion GSheets
-          echo "${{ secrets.GCP_SERVICE_ACCOUNT }}" >> .streamlit/secrets.toml
+          cat <<EOF > .streamlit/secrets.toml
+          OPENSKY_USER = "${{ secrets.OPENSKY_USER }}"
+          OPENSKY_PWD = "${{ secrets.OPENSKY_PWD }}"
+          
+          [connections.gsheets]
+          ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          EOF
 
       - name: Lancement du Radar
         run: python collector.py
