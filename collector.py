@@ -85,12 +85,16 @@ def main():
 
             # 2. Lecture du cache GSheets AVANT d'appeler FR24 pour éviter les doublons d'appels
             conn = st.connection("gsheets", type=GSheetsConnection)
-            cols = ["Date", "Heure", "Avion", "icao24", "Altitude", "De", "A", "Dep_H", "Arr_H"]
+            cols = ["Date", "Heure", "Identifiant Vol (Callsign)", "Identifiant Appareil (ICAO24)", "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source"]
             try:
                 df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
-                # S'assurer que les colonnes indispensables sont là
-                if "icao24" not in df_existant.columns:
-                    df_existant = pd.DataFrame(columns=cols)
+                # S'assurer que les colonnes indispensables sont là (gestion de l'ancien format)
+                if "Identifiant Appareil (ICAO24)" not in df_existant.columns:
+                    # On tente de mapper les anciennes colonnes si elles existent
+                    rename_map = {"Avion": "Identifiant Vol (Callsign)", "icao24": "Identifiant Appareil (ICAO24)", "Altitude": "Altitude (m)"}
+                    df_existant = df_existant.rename(columns=rename_map)
+                    # On ne garde que les colonnes finales
+                    df_existant = df_existant[[c for c in cols if c in df_existant.columns]]
                 else:
                     df_existant = df_existant[cols]
             except:
@@ -105,10 +109,9 @@ def main():
                 
                 # Vérifier si cet icao24 est déjà dans les 15 dernières minutes
                 deja_vu = False
-                if not df_existant.empty:
-                    # On filtre sur le même jour et le même icao24
+                if not df_existant.empty and "Identifiant Appareil (ICAO24)" in df_existant.columns:
                     today_str = now.strftime("%d/%m/%Y")
-                    match_icao = df_existant[(df_existant['icao24'] == icao24) & (df_existant['Date'] == today_str)]
+                    match_icao = df_existant[(df_existant['Identifiant Appareil (ICAO24)'] == icao24) & (df_existant['Date'] == today_str)]
                     
                     for _, row in match_icao.iterrows():
                         try:
@@ -145,8 +148,8 @@ def main():
                 nouveaux_vols.append({
                     "Date": now.strftime("%d/%m/%Y"),
                     "Heure": now.strftime("%H:%M"),
-                    "Avion": callsign,
-                    "icao24": icao24,
+                    "Identifiant Vol (Callsign)": callsign,
+                    "Identifiant Appareil (ICAO24)": icao24,
                     "Altitude (m)": int(altitude),
                     "De": dep,
                     "A": arr,
@@ -157,10 +160,9 @@ def main():
 
             if nouveaux_vols:
                 df_nouveaux = pd.DataFrame(nouveaux_vols)
-                cols = ["Date", "Heure", "Avion", "icao24", "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source"]
                 df_final = pd.concat([df_existant, df_nouveaux], ignore_index=True)
                 # Sécurité supplémentaire contre les doublons exacts
-                df_final = df_final.drop_duplicates(subset=['Date', 'Heure', 'Avion'], keep='last')
+                df_final = df_final.drop_duplicates(subset=['Date', 'Heure', 'Identifiant Vol (Callsign)'], keep='last')
                 
                 conn.update(worksheet="Vols_Joinville", data=df_final.fillna("").tail(2000))
                 print(f"Succès : {len(nouveaux_vols)} nouveaux passages enregistrés.")
