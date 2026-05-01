@@ -6,6 +6,8 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from FlightRadar24 import FlightRadar24API
 from utils_aircraft import refresh_aircraft_db, get_aircraft_info
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Suppression du warning Pandas futur
 pd.set_option('future.no_silent_downcasting', True)
@@ -14,6 +16,12 @@ pd.set_option('future.no_silent_downcasting', True)
 fr_api = FlightRadar24API()
 refresh_aircraft_db()
 
+# Initialisation de la session avec Retry pour OpenSky
+session = requests.Session()
+retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+adapter = HTTPAdapter(max_retries=retry)
+session.mount("https://", adapter)
+
 # BBOX Joinville resserrée
 BBOX = {"lamin": 48.75, "lamax": 48.90, "lomin": 2.35, "lomax": 2.60}
 ALTITUDE_MAX = 3500 
@@ -21,6 +29,7 @@ ALTITUDE_MAX = 3500
 def get_fr24_flights_in_area():
     """Récupère tous les vols FR24 dans la zone pour croisement"""
     try:
+        # Format FR24: "north,south,west,east"
         bounds = f"{BBOX['lamax']},{BBOX['lamin']},{BBOX['lomin']},{BBOX['lomax']}"
         return fr_api.get_flights(bounds=bounds)
     except:
@@ -55,7 +64,8 @@ def main():
         PWD = st.secrets["OPENSKY_PWD"]
         
         url = f"https://opensky-network.org/api/states/all?lamin={BBOX['lamin']}&lomin={BBOX['lomin']}&lamax={BBOX['lamax']}&lomax={BBOX['lomax']}"
-        response = requests.get(url, auth=(USER, PWD), timeout=15)
+        # Utilisation de la session avec retry et timeout augmenté
+        response = session.get(url, auth=(USER, PWD), timeout=30)
         
         if response.status_code == 200:
             states = response.json().get('states') or []
