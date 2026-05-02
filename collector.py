@@ -30,30 +30,19 @@ def get_route_hexdb(callsign: str) -> tuple[str, str] | None:
     if not cs or cs == "INCONNU":
         return None
 
-    def _query(candidate: str) -> tuple[str, str] | None:
-        url = f"https://hexdb.io/api/v1/route/icao/{candidate}"
-        try:
-            print(f"    [API hexdb]     route -> {url}")
-            r = requests.get(url, timeout=5)
-            if r.status_code == 200:
-                route = r.json().get("route", "")
-                parts = route.split("-")
-                if len(parts) == 2 and all(parts):
-                    return parts[0], parts[1]
-            print(f"    [API hexdb]     route -> HTTP {r.status_code} (introuvable)")
-        except Exception as e:
-            print(f"    [API hexdb]     route -> exception : {e}")
-        return None
-
-    result = _query(cs)
-    if result:
-        return result
-
-    stripped = cs.rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    if stripped and stripped != cs:
-        print(f"    [API hexdb]     route -> retry sans suffixe : {cs} -> {stripped}")
-        return _query(stripped)
-
+    url = f"https://hexdb.io/api/v1/route/icao/{cs}"
+    try:
+        print(f"    [API hexdb]     route -> {url}")
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            route = r.json().get("route", "")
+            parts = route.split("-")
+            if len(parts) == 2 and all(parts):
+                return parts[0], parts[1]
+        print(f"    [API hexdb]     route -> HTTP {r.status_code} (introuvable)")
+    except Exception as e:
+        print(f"    [API hexdb]     route -> exception : {e}")
+    
     return None
 
 
