@@ -100,12 +100,16 @@ def get_flight_airlabs(icao24: str) -> dict | None:
         api_key = st.secrets.get("AIRLABS_API_KEY", "")
         if not api_key: return None
         url = f"https://airlabs.co/api/v9/flights?hex={icao24.lower()}&api_key={api_key}"
+        print(f"    [API AirLabs]   requête -> {url}")
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if "response" in data and isinstance(data["response"], list) and len(data["response"]) > 0:
+                print(f"    [API AirLabs]   réponse OK")
                 return data["response"][0]
-    except: pass
+        print(f"    [API AirLabs]   aucun résultat ou HTTP {r.status_code}")
+    except Exception as e:
+        print(f"    [API AirLabs]   exception : {e}")
     return None
 
 def get_flight_flightaware(callsign: str) -> dict | None:
@@ -116,11 +120,13 @@ def get_flight_flightaware(callsign: str) -> dict | None:
         cs = callsign.strip().upper()
         url = f"https://aeroapi.flightaware.com/aeroapi/flights/{cs}"
         headers = {"x-apikey": api_key}
+        print(f"    [API FlightAware] requête -> {cs}")
         r = requests.get(url, headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if "flights" in data and len(data["flights"]) > 0:
                 f = data["flights"][0]
+                print(f"    [API FlightAware] réponse OK")
                 return {
                     "dep": f.get("origin", {}).get("code_iata") or f.get("origin", {}).get("code_icao"),
                     "arr": f.get("destination", {}).get("code_iata") or f.get("destination", {}).get("code_icao"),
@@ -128,7 +134,9 @@ def get_flight_flightaware(callsign: str) -> dict | None:
                     "h_arr": f.get("scheduled_in", "")[11:16] if f.get("scheduled_in") else "--:--",
                     "raw": f
                 }
-    except: pass
+        print(f"    [API FlightAware] aucun résultat ou HTTP {r.status_code}")
+    except Exception as e:
+        print(f"    [API FlightAware] exception : {e}")
     return None
 
 def get_route_hexdb(callsign: str) -> tuple[str, str] | None:
@@ -234,11 +242,9 @@ def run_scan():
         
         candidates = []
         for avion in states:
-            icao24 = avion[0]
-            callsign = str(avion[1]).strip() or "Inconnu"
+            icao24, callsign, au_sol = avion[0], str(avion[1]).strip() or "Inconnu", avion[8]
             lat, lon, heading, velocity = avion[6], avion[5], avion[10], avion[9]
             altitude = avion[13] or avion[7] or 0
-            au_sol = avion[8]
             
             if altitude < ALTITUDE_MAX:
                 if altitude < 10 or au_sol: continue
@@ -295,9 +301,9 @@ def run_scan():
                         if abs((datetime.strptime(df.at[idx, "Heure"], "%H:%M") - now_dt).total_seconds() / 60) < 15:
                             if pos_str not in str(df.at[idx, "Positions"]):
                                 df.at[idx, "Positions"] = (str(df.at[idx, "Positions"]) + " | " + pos_str).strip(" | ")
+                                print(f"    ✅ Position ajoutée pour {callsign}")
                             df.at[idx, "Altitude (m)"], df.at[idx, "Evolution Verticale"] = altitude, trend
                             updated = True
-                            print(f"    ✅ Position ajoutée pour {callsign}")
                             break
                     except: pass
                 
@@ -308,7 +314,11 @@ def run_scan():
                     
                     al_data = get_flight_airlabs(icao24)
                     if al_data:
-                        dep, arr, h_dep, h_arr, source = al_data.get("dep_iata") or al_data.get("dep_icao") or "Inconnu", al_data.get("arr_iata") or al_data.get("arr_icao") or "Inconnu", al_data.get("dep_time") or "--:--", al_data.get("arr_time") or "--:--", "AirLabs"
+                        dep = al_data.get("dep_iata") or al_data.get("dep_icao") or "Inconnu"
+                        arr = al_data.get("arr_iata") or al_data.get("arr_icao") or "Inconnu"
+                        h_dep = al_data.get("dep_time") or "--:--"
+                        h_arr = al_data.get("arr_time") or "--:--"
+                        source = "AirLabs"
                         if not make or make == "Inconnu": make = clean(al_data.get("airline_name"))
                         if not model or model == "Inconnu": model = clean(al_data.get("model"))
                         if not reg or reg == "Inconnu": reg = clean(al_data.get("reg_number"))
@@ -317,7 +327,8 @@ def run_scan():
                     if dep == "Inconnu":
                         fa_data = get_flight_flightaware(callsign)
                         if fa_data:
-                            dep, arr, h_dep, h_arr, source, airlabs_raw = fa_data["dep"], fa_data["arr"], fa_data["h_dep"], fa_data["h_arr"], "FlightAware", json.dumps(fa_data["raw"], ensure_ascii=False)
+                            dep, arr, h_dep, h_arr, source = fa_data["dep"], fa_data["arr"], fa_data["h_dep"], fa_data["h_arr"], "FlightAware"
+                            airlabs_raw = json.dumps(fa_data["raw"], ensure_ascii=False)
                     
                     if dep == "Inconnu":
                         hexdb_result = get_route_hexdb(callsign)
