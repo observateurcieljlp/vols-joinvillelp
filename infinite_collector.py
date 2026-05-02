@@ -99,8 +99,10 @@ def get_flight_airlabs(icao24: str) -> dict | None:
     try:
         api_key = st.secrets.get("AIRLABS_API_KEY", "")
         if not api_key: return None
+        
         url = f"https://airlabs.co/api/v9/flights?hex={icao24.lower()}&api_key={api_key}"
         print(f"    [API AirLabs]   requête -> {url}")
+        
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             data = r.json()
@@ -110,33 +112,6 @@ def get_flight_airlabs(icao24: str) -> dict | None:
         print(f"    [API AirLabs]   aucun résultat ou HTTP {r.status_code}")
     except Exception as e:
         print(f"    [API AirLabs]   exception : {e}")
-    return None
-
-def get_flight_flightaware(callsign: str) -> dict | None:
-    """Interroge l'API FlightAware AeroAPI (V4)."""
-    try:
-        api_key = st.secrets.get("FLIGHTAWARE_API_KEY", "")
-        if not api_key: return None
-        cs = callsign.strip().upper()
-        url = f"https://aeroapi.flightaware.com/aeroapi/flights/{cs}"
-        headers = {"x-apikey": api_key}
-        print(f"    [API FlightAware] requête -> {cs}")
-        r = requests.get(url, headers=headers, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if "flights" in data and len(data["flights"]) > 0:
-                f = data["flights"][0]
-                print(f"    [API FlightAware] réponse OK")
-                return {
-                    "dep": f.get("origin", {}).get("code_iata") or f.get("origin", {}).get("code_icao"),
-                    "arr": f.get("destination", {}).get("code_iata") or f.get("destination", {}).get("code_icao"),
-                    "h_dep": f.get("scheduled_out", "")[11:16] if f.get("scheduled_out") else "--:--",
-                    "h_arr": f.get("scheduled_in", "")[11:16] if f.get("scheduled_in") else "--:--",
-                    "raw": f
-                }
-        print(f"    [API FlightAware] aucun résultat ou HTTP {r.status_code}")
-    except Exception as e:
-        print(f"    [API FlightAware] exception : {e}")
     return None
 
 def get_route_hexdb(callsign: str) -> tuple[str, str] | None:
@@ -210,6 +185,43 @@ def get_real_flight_info(icao24):
     return make, model, reg
 
 # =============================================================================
+# GESTION DU TOKEN OPENSKY (OAuth2)
+# =============================================================================
+
+_opensky_token = None
+_token_expiry = 0
+
+def get_opensky_token():
+    """Échange les identifiants client contre un Bearer Token pour les 4000 crédits."""
+    global _opensky_token, _token_expiry
+    if _opensky_token and time.time() < _token_expiry - 60:
+        return _opensky_token
+
+    print("🔑 Rafraîchissement du Token OpenSky...")
+    try:
+        client_id = st.secrets.get("OPENSKY_CLIENT_ID")
+        client_secret = st.secrets.get("OPENSKY_CLIENT_SECRET")
+        if not client_id: client_id = st.secrets.get("OPENSKY_USER")
+        if not client_secret: client_secret = st.secrets.get("OPENSKY_PWD")
+
+        auth_url = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+        payload = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
+        
+        r = requests.post(auth_url, data=payload, timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            _opensky_token = data.get("access_token")
+            expires_in = data.get("expires_in", 1800)
+            _token_expiry = time.time() + expires_in
+            print(f"✅ Nouveau Token obtenu (expire dans {int(expires_in/60)} min)")
+            return _opensky_token
+        else:
+            print(f"❌ Échec de l'authentification OpenSky : {r.status_code} - {r.text}")
+    except Exception as e:
+        print(f"❌ Erreur lors de l'échange de token : {e}")
+    return None
+
+# =============================================================================
 # BOUCLE PRINCIPALE
 # =============================================================================
 
@@ -223,13 +235,11 @@ def run_scan():
     decision_reason = "Default Heartbeat (3 min)"
 
     try:
-        USER = st.secrets["OPENSKY_USER"].lower()
-        PWD = st.secrets["OPENSKY_PWD"]
-        
+        token = get_opensky_token()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
         url = f"https://opensky-network.org/api/states/all?lamin={BBOX_WATCH['lamin']}&lomin={BBOX_WATCH['lomin']}&lamax={BBOX_WATCH['lamax']}&lomax={BBOX_WATCH['lomax']}"
-        response = session.get(url, auth=(USER, PWD), timeout=30)
+        response = session.get(url, headers=headers, timeout=30)
         
-        # Affichage des crédits restants (OpenSky envoie ça dans les headers)
         credits_restants = response.headers.get("X-Rate-Limit-Remaining", "Inconnu")
         print(f"💰 CRÉDITS OPENSKY : {credits_restants}")
 
@@ -323,12 +333,6 @@ def run_scan():
                         if not model or model == "Inconnu": model = clean(al_data.get("model"))
                         if not reg or reg == "Inconnu": reg = clean(al_data.get("reg_number"))
                         airlabs_raw = json.dumps(al_data, ensure_ascii=False)
-                    
-                    if dep == "Inconnu":
-                        fa_data = get_flight_flightaware(callsign)
-                        if fa_data:
-                            dep, arr, h_dep, h_arr, source = fa_data["dep"], fa_data["arr"], fa_data["h_dep"], fa_data["h_arr"], "FlightAware"
-                            airlabs_raw = json.dumps(fa_data["raw"], ensure_ascii=False)
                     
                     if dep == "Inconnu":
                         hexdb_result = get_route_hexdb(callsign)

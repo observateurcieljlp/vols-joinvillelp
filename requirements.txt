@@ -1,5 +1,8 @@
-streamlit
+requests
 pandas
+streamlit
 st-gsheets-connection
 FlightRadarAPI
 beautifulsoup4
+pyarrow
+urllib3
