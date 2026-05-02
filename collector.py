@@ -30,23 +30,41 @@ def get_route_hexdb(callsign: str) -> tuple[str, str] | None:
     Interroge hexdb.io pour obtenir l'origine et la destination d'un vol
     à partir de son callsign ICAO (ex: AFR1234).
 
+    Si le callsign a un suffixe alpha non numérique (ex: TVF668M → TVF668),
+    une seconde tentative est faite avec le suffixe strippé.
+
     Retourne (dep_icao, arr_icao) ou None si introuvable.
     """
-    cs = callsign.strip()
-    if not cs or cs == "Inconnu":
+    cs = callsign.strip().upper()
+    if not cs or cs == "INCONNU":
         return None
-    try:
-        r = requests.get(
-            f"https://hexdb.io/api/v1/route/icao/{cs}",
-            timeout=5
-        )
-        if r.status_code == 200:
-            route = r.json().get("route", "")   # format "ORIG-DEST"
-            parts = route.split("-")
-            if len(parts) == 2 and all(parts):
-                return parts[0], parts[1]
-    except Exception:
-        pass
+
+    def _query(candidate: str) -> tuple[str, str] | None:
+        url = f"https://hexdb.io/api/v1/route/icao/{candidate}"
+        try:
+            print(f"    [API hexdb]     route → {url}")
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                route = r.json().get("route", "")
+                parts = route.split("-")
+                if len(parts) == 2 and all(parts):
+                    return parts[0], parts[1]
+            print(f"    [API hexdb]     route → HTTP {r.status_code} (introuvable)")
+        except Exception as e:
+            print(f"    [API hexdb]     route → exception : {e}")
+        return None
+
+    # Tentative 1 : callsign complet
+    result = _query(cs)
+    if result:
+        return result
+
+    # Tentative 2 : retrait des lettres finales (ex: TVF668M → TVF668)
+    stripped = cs.rstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    if stripped and stripped != cs:
+        print(f"    [API hexdb]     route → retry sans suffixe : {cs} → {stripped}")
+        return _query(stripped)
+
     return None
 
 
@@ -62,18 +80,18 @@ def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str]:
     Retourne (compagnie, modele, immat) — chaînes vides si non trouvé.
     """
     try:
-        r = requests.get(
-            f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}",
-            timeout=5
-        )
+        url = f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}"
+        print(f"    [API hexdb]     aircraft → {url}")
+        r = requests.get(url, timeout=5)
         if r.status_code == 200:
             d = r.json()
             compagnie = d.get("RegisteredOwners", "")
             modele    = d.get("Type", "")
             immat     = d.get("Registration", "")
             return compagnie, modele, immat
-    except Exception:
-        pass
+        print(f"    [API hexdb]     aircraft → HTTP {r.status_code}")
+    except Exception as e:
+        print(f"    [API hexdb]     aircraft → exception : {e}")
     return "", "", ""
 
 
@@ -89,10 +107,11 @@ def resolve_airport(code: str) -> str:
     Retourne le code brut si l'aéroport est introuvable.
     """
     code = code.strip().upper()
-    if not code or code in ("Inconnu", "?"):
+    if not code or code in ("INCONNU", "?", ""):
         return code
 
     if code in _airport_cache:
+        print(f"    [CACHE airport] {code} → {_airport_cache[code]}")
         return _airport_cache[code]
 
     try:
@@ -102,6 +121,7 @@ def resolve_airport(code: str) -> str:
         else:
             endpoint = f"https://hexdb.io/api/v1/airport/iata/{code}"
 
+        print(f"    [API hexdb]     airport → {endpoint}")
         r = requests.get(endpoint, timeout=5)
         if r.status_code == 200:
             nom = r.json().get("airport", "").strip()
@@ -111,8 +131,9 @@ def resolve_airport(code: str) -> str:
             result = f"{nom} ({code})" if nom else code
             _airport_cache[code] = result
             return result
-    except Exception:
-        pass
+        print(f"    [API hexdb]     airport → HTTP {r.status_code}")
+    except Exception as e:
+        print(f"    [API hexdb]     airport → exception : {e}")
 
     _airport_cache[code] = code   # on met en cache l'échec aussi
     return code
@@ -123,8 +144,10 @@ def resolve_airport(code: str) -> str:
 def get_fr24_flights_in_area():
     try:
         bounds = f"{BBOX['lamax']},{BBOX['lamin']},{BBOX['lomin']},{BBOX['lomax']}"
+        print(f"    [API FR24]      scan zone → bounds={bounds}")
         return fr_api.get_flights(bounds=bounds)
-    except Exception:
+    except Exception as e:
+        print(f"    [API FR24]      scan zone → exception : {e}")
         return []
 
 
@@ -141,6 +164,7 @@ def get_route_fr24(icao24: str, fr24_flights: list) -> tuple[str, str, str, str]
             None
         )
         if flight:
+            print(f"    [API FR24]      détails vol → icao24={icao24}")
             details = fr_api.get_flight_details(flight)
             flight.set_flight_details(details)
             dep = flight.origin_airport_iata      if flight.origin_airport_iata      != "N/A" else "Inconnu"
@@ -151,8 +175,10 @@ def get_route_fr24(icao24: str, fr24_flights: list) -> tuple[str, str, str, str]
                     h_dep = datetime.fromtimestamp(time_info["real"]["departure"]).strftime("%H:%M")
                 if time_info.get("estimated", {}).get("arrival"):
                     h_arr = datetime.fromtimestamp(time_info["estimated"]["arrival"]).strftime("%H:%M")
-    except Exception:
-        pass
+        else:
+            print(f"    [API FR24]      icao24={icao24} non trouvé dans les vols de la zone")
+    except Exception as e:
+        print(f"    [API FR24]      exception : {e}")
     return dep, arr, h_dep, h_arr
 
 
@@ -175,10 +201,11 @@ def main():
             f"?lamin={BBOX['lamin']}&lomin={BBOX['lomin']}"
             f"&lamax={BBOX['lamax']}&lomax={BBOX['lomax']}"
         )
+        print(f"[API OpenSky]   scan zone → {BBOX}")
         response = session.get(url, auth=(USER, PWD), timeout=30)
 
         if response.status_code != 200:
-            print(f"Erreur OpenSky : {response.status_code}")
+            print(f"[API OpenSky]   erreur HTTP {response.status_code}")
             return
 
         states = response.json().get("states") or []
@@ -195,7 +222,7 @@ def main():
                 print(f"  {tag} {callsign} ({int(altitude)} m) — éligible")
                 vols_potentiels.append(avion)
             else:
-                print(f"  [Ignoré] {callsign} ({int(altitude)} m) — trop haut ou au sol")
+                print(f"  [Ignoré]    {callsign} ({int(altitude)} m) — trop haut ou au sol")
 
         if not vols_potentiels:
             print("Aucun vol éligible.")
@@ -209,6 +236,7 @@ def main():
             "Altitude (m)", "De", "A", "Dep_H", "Arr_H", "Source", "Planespotters",
         ]
         try:
+            print("[GSheets]       lecture feuille Vols_Joinville...")
             df_existant = conn.read(worksheet="Vols_Joinville", ttl=0)
             rename_map = {
                 "Avion":    "Identifiant Vol (Callsign)",
@@ -220,7 +248,9 @@ def main():
                 if c not in df_existant.columns:
                     df_existant[c] = "Inconnu"
             df_existant = df_existant[cols]
-        except Exception:
+            print(f"[GSheets]       {len(df_existant)} ligne(s) existante(s) chargée(s)")
+        except Exception as e:
+            print(f"[GSheets]       impossible de lire la feuille ({e}) → démarrage à vide")
             df_existant = pd.DataFrame(columns=cols)
 
         # ── Filtre anti-doublon (15 min) ───────────────────────────────────
@@ -245,6 +275,7 @@ def main():
                         )
                         if delta < 15:
                             deja_vu = True
+                            print(f"  [Doublon]   {callsign} ({icao24}) — déjà enregistré il y a {int(delta)} min")
                             break
                     except Exception:
                         pass
@@ -256,15 +287,20 @@ def main():
             return
 
         # ── FR24 : un seul appel groupé, seulement si nécessaire ──────────
-        # On déclenche la récup FR24 en lazy (au premier fallback)
         fr24_flights_cache: list | None = None
 
         def get_fr24_lazy():
             nonlocal fr24_flights_cache
             if fr24_flights_cache is None:
-                print("  → Appel FR24 groupé (fallback)...")
+                print("    [API FR24]      premier fallback → appel groupé de la zone...")
                 fr24_flights_cache = get_fr24_flights_in_area()
+            else:
+                print("    [CACHE FR24]    réutilisation des vols déjà chargés")
             return fr24_flights_cache
+
+        # ── Helper : valeur réellement renseignée (pas vide ni "Inconnu") ──
+        def is_valid(*values: str) -> bool:
+            return any(v and v.strip() and v.strip().upper() not in ("INCONNU", "UNKNOWN", "N/A") for v in values)
 
         # ── Enrichissement vol par vol ─────────────────────────────────────
         nouveaux_vols = []
@@ -275,13 +311,19 @@ def main():
 
             print(f"\n  ✈️  {callsign} ({icao24}) — {int(altitude)} m")
 
-            # ── Infos appareil : hexdb en priorité, utils_aircraft en fallback ──
-            make, model, reg = get_aircraft_hexdb(icao24)
-            if any([make, model, reg]):
-                print(f"    aircraft hexdb ✅  {make} / {model} / {reg}")
+            # ── Infos appareil : DB locale parquet → hexdb → aucune info ──
+            print(f"    [DB locale]     aircraft → recherche icao24={icao24}...")
+            make, model, reg = get_aircraft_info(icao24)
+            if is_valid(make, model, reg):
+                print(f"    [DB locale]     aircraft ✅  {make} / {model} / {reg}")
             else:
-                make, model, reg = get_aircraft_info(icao24)
-                print(f"    aircraft hexdb ❌  → fallback OpenSky DB")
+                print(f"    [DB locale]     aircraft ❌  → fallback hexdb API")
+                make, model, reg = get_aircraft_hexdb(icao24)
+                if is_valid(make, model, reg):
+                    print(f"    [API hexdb]     aircraft ✅  {make} / {model} / {reg}")
+                else:
+                    print(f"    [API hexdb]     aircraft ❌  → aucune info appareil trouvée")
+                    make, model, reg = "", "", ""
 
             # ── Route : hexdb en priorité, FR24 en fallback ────────────────
             hexdb_result = get_route_hexdb(callsign)
@@ -289,19 +331,20 @@ def main():
                 dep, arr     = hexdb_result
                 h_dep, h_arr = "--:--", "--:--"
                 source       = "hexdb"
-                print(f"    hexdb ✅  {dep} → {arr}")
+                print(f"    [API hexdb]     route ✅  {dep} → {arr}")
             else:
-                # FR24 bloqué si l'avion est au-dessus de l'altitude max,
-                # y compris en test-mode (inutile de l'appeler pour un croiseur en route)
                 if altitude >= ALTITUDE_MAX:
-                    print(f"    hexdb ❌  + altitude {int(altitude)} m ≥ {ALTITUDE_MAX} m → FR24 ignoré")
+                    print(f"    [API hexdb]     route ❌  + altitude {int(altitude)} m ≥ {ALTITUDE_MAX} m → FR24 ignoré")
                     dep, arr, h_dep, h_arr = "Inconnu", "Inconnu", "--:--", "--:--"
                     source = "OpenSky (Live)"
                 else:
-                    # FR24 chargé en lazy : un seul appel groupé pour tous les fallbacks
-                    print(f"    hexdb ❌  → appel FR24...")
+                    print(f"    [API hexdb]     route ❌  → fallback FR24")
                     dep, arr, h_dep, h_arr = get_route_fr24(icao24, get_fr24_lazy())
                     source = "FR24" if dep != "Inconnu" else "OpenSky (Live)"
+                    if dep != "Inconnu":
+                        print(f"    [API FR24]      route ✅  {dep} → {arr}")
+                    else:
+                        print(f"    [API FR24]      route ❌  → aucune route trouvée")
 
             # ── Résolution des noms d'aéroports ───────────────────────────
             dep_label = resolve_airport(dep)
@@ -339,11 +382,12 @@ def main():
                   .tail(2000)
                   .fillna("")
             )
+            print(f"\n[GSheets]       écriture de {len(nouveaux_vols)} nouveau(x) passage(s)...")
             conn.update(worksheet="Vols_Joinville", data=df_final)
-            print(f"\nSuccès : {len(nouveaux_vols)} passage(s) enregistré(s).")
+            print(f"[GSheets]       ✅  {len(nouveaux_vols)} passage(s) enregistré(s).")
 
     except Exception as e:
-        print(f"Erreur : {e}")
+        print(f"Erreur fatale : {e}")
         import traceback
         traceback.print_exc()
 
