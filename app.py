@@ -27,8 +27,8 @@ try:
     if df is None or df.empty:
         st.info("Le radar tourne, mais aucun avion n'a encore été enregistré aujourd'hui.")
     else:
-        # Nettoyage : On ne montre pas la colonne technique icao24 aux riverains
-        cols_affichage = [c for c in df.columns if c != 'icao24']
+        # Nettoyage : On ne montre pas la colonne technique Identifiant Appareil (ICAO24) aux riverains
+        cols_affichage = [c for c in df.columns if c != 'Identifiant Appareil (ICAO24)']
         df_display = df[cols_affichage].copy()
 
         # Filtres pour les riverains
