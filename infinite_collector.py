@@ -1,9 +1,10 @@
+import warnings
+warnings.filterwarnings("ignore")
 import logging
-# Supprimer les logs Streamlit/GSheets en mode bare
-logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
-logging.getLogger("streamlit.runtime.state.session_state_proxy").setLevel(logging.ERROR)
-logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
-import pandas as pd
+# Silence total de Streamlit
+logging.getLogger("streamlit").setLevel(logging.ERROR)
+import os
+
 import os
 import time
 import math

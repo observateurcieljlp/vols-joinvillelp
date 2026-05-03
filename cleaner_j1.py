@@ -5,11 +5,11 @@ Nettoyeur intelligent pour enrichir les données de vol a posteriori.
 Gère les retries pour éviter les bans et utilise une cascade de sources.
 """
 
+import warnings
+warnings.filterwarnings("ignore")
 import logging
-# Supprimer les logs Streamlit/GSheets en mode bare
-logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
-logging.getLogger("streamlit.runtime.state.session_state_proxy").setLevel(logging.ERROR)
-logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
+# Silence total de Streamlit
+logging.getLogger("streamlit").setLevel(logging.ERROR)
 import time
 import json
 import requests
