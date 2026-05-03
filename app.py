@@ -20,33 +20,53 @@ except Exception as e:
     st.stop()
 
 try:
-    # Lecture des données enregistrées par le bot GitHub
-    # On force le rafraîchissement avec ttl=0 pour éviter l'erreur 400 liée au cache
+    # 1. Lecture des données
     df = conn.read(worksheet="Vols_Joinville", ttl=0)
     
     if df is None or df.empty:
         st.info("Le radar tourne, mais aucun avion n'a encore été enregistré aujourd'hui.")
     else:
-        # Nettoyage : On ne montre pas la colonne technique Identifiant Appareil (ICAO24) aux riverains
-        cols_affichage = [c for c in df.columns if c != 'Identifiant Appareil (ICAO24)']
-        df_display = df[cols_affichage].copy()
-
-        # Filtres pour les riverains
+        # 2. Préparation des filtres en sidebar
         st.sidebar.header("Filtres")
-        jours_dispos = df_display['Date'].unique()
+        jours_dispos = df['Date'].unique()
         jour_choisi = st.sidebar.selectbox("Choisir un jour", sorted(jours_dispos, reverse=True))
         
-        # Application du filtre
-        df_jour = df_display[df_display['Date'] == jour_choisi].copy()
-        
+        # 3. Filtrage des données (on garde l'ICAO24 caché pour les liens)
+        df_jour = df[df['Date'] == jour_choisi].copy()
+
+        # --- NOUVEAU : GÉNÉRATION DES LIENS ---
+        def get_adsb_link(icao24, date):
+            if not icao24 or pd.isna(icao24): return None
+            return f"https://globe.adsbexchange.com/?icao={str(icao24).strip()}&showHistory={date}"
+
+        # On crée la colonne de liens (sans l'afficher telle quelle)
+        df_jour['Trajet'] = df_jour.apply(
+            lambda row: get_adsb_link(row['Identifiant Appareil (ICAO24)'], row['Date']), 
+            axis=1
+        )
+        # --------------------------------------
+
+        # 4. Affichage des Metrics (Valeur ajoutée)
         st.metric(f"Avions détectés le {jour_choisi}", len(df_jour))
         
-        # Formatage optionnel : s'assurer que l'altitude est affichée sans virgule
-        if 'Altitude (m)' in df_jour.columns:
-            df_jour['Altitude (m)'] = df_jour['Altitude (m)'].astype(int)
+        # 5. Nettoyage de l'affichage
+        # On définit ici les colonnes qu'on veut vraiment montrer
+        colonnes_visibles = ['Heure', 'Indicatif', 'Altitude (m)', 'Trajet'] 
+        # Assurez-vous que ces noms correspondent exactement à votre Google Sheet
         
-        # Affichage du tableau propre
-        st.dataframe(df_jour, use_container_width=True)
+        # 6. Affichage du tableau avec configuration spéciale pour le lien
+        st.dataframe(
+            df_jour[colonnes_visibles], 
+            column_config={
+                "Trajet": st.column_config.LinkColumn(
+                    "Revoir le trajet", 
+                    display_text="🗺️ Voir sur la carte"
+                ),
+                "Altitude (m)": st.column_config.NumberColumn(format="%d m")
+            },
+            use_container_width=True,
+            hide_index=True # Pour enlever la colonne d'index 0, 1, 2...
+        )
 
 except Exception as e:
-    st.error(f"Erreur de lecture de la base de données : {e}")
+    st.error(f"Erreur : {e}")

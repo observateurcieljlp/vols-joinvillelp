@@ -1,8 +1,8 @@
 """
-flightaware_scraper_v2.py
-======================
-Récupère l'historique de vols depuis FlightAware (via JSON Bootstrap)
-Filtre strictement selon ta logique d'origine.
+cleaner_j1.py
+============
+Nettoyeur intelligent pour enrichir les données de vol a posteriori.
+Gère les retries pour éviter les bans et utilise une cascade de sources.
 """
 
 import re
@@ -22,14 +22,15 @@ import pytz
 
 WORKSHEET = "Vols_Joinville"
 
+# Schéma complet aligné sur infinite_collector.py + Nettoyage Retries
 COLS = [
     "Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie", "Modèle Avion",
     "Immatriculation", "Identifiant Appareil (ICAO24)", "Altitude (m)",
     "Evolution Verticale", "De", "A", "Dep_H", "Arr_H", "Source",
-    "Planespotters", "Positions", "Airlabs Info"
+    "Planespotters", "Positions", "Airlabs Info", "Nettoyage Retries"
 ]
 
-SOURCES_NON_FIABLES = ["hexdb", "OpenSky (Live)"]
+MAX_RETRIES = 2
 MATCH_MARGIN_MINUTES = 60
 
 # ---------------------------------------------------------------------------
@@ -60,11 +61,9 @@ def _parse_trackpoll_bootstrap(html: str, callsign: str) -> list[dict]:
         for flight_key in flights_root:
             raw_flights = flights_root[flight_key].get("activityLog", {}).get("flights", [])
             for f in raw_flights:
-                # Extraction intelligente des codes ou noms d'aéroports
                 orig = f.get("origin", {})
                 dest = f.get("destination", {})
 
-                # Si le code OACI n'est pas valide (ex: coordonnées GPS), on prend le nom friendly
                 if orig.get("isValidAirportCode"):
                     dep_code = orig.get("icao") or orig.get("iata")
                 else:
@@ -103,7 +102,7 @@ def get_flightaware_web_data(
     
     url = f"https://www.flightaware.com/live/flight/{callsign.strip().upper()}"
     session = _get_fa_session()
-    tz_paris = pytz.timezone("Europe/Paris") # Le fuseau cible
+    tz_paris = pytz.timezone("Europe/Paris")
 
     try:
         r = session.get(url, timeout=20)
@@ -143,62 +142,54 @@ def get_flightaware_web_data(
                 best_match = f
 
     if best_match:
-        # --- CORRECTION ICI : Conversion en Heure de Paris ---
         dt_dep_paris = best_match["dep_utc"].astimezone(tz_paris)
         h_dep = dt_dep_paris.strftime("%H:%M")
         
+        h_arr = "--:--"
         if best_match["arr_utc"]:
             dt_arr_paris = best_match["arr_utc"].astimezone(tz_paris)
             h_arr = dt_arr_paris.strftime("%H:%M")
-        else:
-            h_arr = "--:--"
-            
-        print(f"        [Scraper FA]  ✅ Match : {best_match['dep_code']} ({h_dep}) → {best_match['arr_code']} ({h_arr})")
+
         return best_match["dep_code"], best_match["arr_code"], h_dep, h_arr, best_match
 
     return None, None, None, None, None
 
 # ---------------------------------------------------------------------------
-# OpenSky (fallback)
+# FALLBACK OPENSKY
 # ---------------------------------------------------------------------------
 
-def get_opensky_flight_history(
-    icao24: str, timestamp: int | float, user: str, pwd: str
-) -> tuple[str | None, str | None, str | None, str | None]:
-    begin, end = int(timestamp) - 14400, int(timestamp) + 14400
+def get_opensky_flight_history(icao24, timestamp, user, pwd):
+    begin, end = timestamp - 14400, timestamp + 14400
     url = f"https://opensky-network.org/api/flights/aircraft?icao24={icao24}&begin={begin}&end={end}"
     try:
         response = requests.get(url, auth=(user, pwd), timeout=20)
         if response.status_code == 200:
             flights = response.json()
             if flights:
-                best = min(flights, key=lambda f: abs((f.get("firstSeen") or 0) - timestamp))
-                dep = best.get("estDepartureAirport") or "Inconnu"
-                arr = best.get("estArrivalAirport") or "Inconnu"
-                h_dep = datetime.fromtimestamp(best["firstSeen"], tz=pytz.utc).strftime("%H:%M") if best.get("firstSeen") else "--:--"
-                h_arr = datetime.fromtimestamp(best["lastSeen"], tz=pytz.utc).strftime("%H:%M") if best.get("lastSeen") else "--:--"
+                best = min(flights, key=lambda f: abs((f.get('firstSeen') or 0) - timestamp))
+                dep, arr = best.get('estDepartureAirport') or "Inconnu", best.get('estArrivalAirport') or "Inconnu"
+                h_dep = datetime.fromtimestamp(best.get('firstSeen')).strftime('%H:%M') if best.get('firstSeen') else "--:--"
+                h_arr = datetime.fromtimestamp(best.get('lastSeen')).strftime('%H:%M') if best.get('lastSeen') else "--:--"
                 return dep, arr, h_dep, h_arr
-    except Exception as e:
-        print(f"        [OpenSky]  Erreur : {e}")
+    except: pass
     return None, None, None, None
 
 # ---------------------------------------------------------------------------
-# Résolution lisible d'un code aéroport
+# UTILITAIRES AEROPORTS
 # ---------------------------------------------------------------------------
 
 _airport_cache: dict[str, str] = {}
 
 def resolve_airport(code: str) -> str:
-    code = code.strip().upper()
-    if not code or code in ("INCONNU", "?", ""): return code
+    code = str(code).strip().upper()
+    if not code or code in ("INCONNU", "?", "", "NONE", "NAN"): return "Inconnu"
     if code in _airport_cache: return _airport_cache[code]
     try:
-        kind = "icao" if len(code) == 4 else "iata"
-        r = requests.get(f"https://hexdb.io/api/v1/airport/{kind}/{code}", timeout=5)
+        endpoint = f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}"
+        r = requests.get(endpoint, timeout=5)
         if r.status_code == 200:
             nom = r.json().get("airport", "").strip()
-            for suffix in (" Airport", " International Airport", " Intl", " International"):
-                nom = nom.replace(suffix, "")
+            for s in (" Airport", " International Airport", " Intl", " International"): nom = nom.replace(s, "")
             res = f"{nom} ({code})" if nom else code
             _airport_cache[code] = res
             return res
@@ -207,158 +198,118 @@ def resolve_airport(code: str) -> str:
     return code
 
 # ---------------------------------------------------------------------------
-# Main 
+# MAIN
 # ---------------------------------------------------------------------------
 
 def main():
-    print(
-        f"\n{'='*60}\n"
-        f"🧹 DÉMARRAGE DU NETTOYEUR J+1 : "
-        f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n"
-        f"{'='*60}"
-    )
-
-    # 1. Secrets OpenSky
-    try:
-        user = st.secrets["OPENSKY_USER"].lower()
-        pwd  = st.secrets["OPENSKY_PWD"]
-    except Exception:
-        user, pwd = "", ""
-        print("    ⚠️ Secrets OpenSky non trouvés.")
-
-    # 2. Lecture de la feuille
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(worksheet=WORKSHEET, ttl=0)
-
-    if df.empty:
-        print("    Feuille vide, rien à faire.")
-        return
-
-    # 3. Normalisation des colonnes
-    rename_map = {
-        "Avion": "Identifiant Vol (Callsign)",
-        "icao24": "Identifiant Appareil (ICAO24)",
-        "Altitude": "Altitude (m)",
-    }
-    df = df.rename(columns=rename_map)
-    for c in COLS:
-        if c not in df.columns:
-            df[c] = ""
-    df = df[COLS]
-
-    # 4. GESTION DU TEMPS (Conversion Paris -> UTC)
-    tz_paris = pytz.timezone("Europe/Paris")
+    print(f"\n{'='*60}\n🧹 DÉMARRAGE DU NETTOYEUR J+1 : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n{'='*60}")
     
-    def get_utc_ts(row):
-        try:
-            # On combine Date (DD/MM/YYYY) et Heure (HH:MM)
-            dt_str = f"{str(row['Date']).strip()} {str(row['Heure']).strip()}"
-            # On l'interprète comme heure locale Paris
-            dt_naive = datetime.strptime(dt_str, "%d/%m/%Y %H:%M")
-            dt_paris = tz_paris.localize(dt_naive)
-            # On retourne le timestamp UTC
-            return dt_paris.timestamp()
-        except:
-            return None
-
-    df["ts_matching"] = df.apply(get_utc_ts, axis=1)
-
-# 5. Filtrage des lignes à traiter (Logique intelligente)
-    def check_eligibility(row):
-        # On définit ce qu'on considère comme "vide" ou "incomplet"
-        vides = ["", "Inconnu", "nan", None, "--:--"]
+    try:
+        user, pwd = st.secrets.get("OPENSKY_USER", "").lower(), st.secrets.get("OPENSKY_PWD", "")
+        conn = st.connection("gsheets", type=GSheetsConnection)
         
-        missing_de = str(row["De"]).strip().lower() in vides
-        missing_a  = str(row["A"]).strip().lower() in vides
-        missing_dep_h = str(row["Dep_H"]).strip() in vides
-        missing_arr_h = str(row["Arr_H"]).strip() in vides
+        # 1. Lecture et mise en forme
+        df = conn.read(worksheet=WORKSHEET, ttl=0)
+        if df.empty:
+            print("   Base vide.")
+            return
 
-        # Si tout est déjà rempli, on ne touche à rien
-        if not (missing_de or missing_a or missing_dep_h or missing_arr_h):
-            return False
+        # S'assurer de la présence des colonnes
+        for c in COLS:
+            if c not in df.columns: df[c] = ""
+        
+        # 2. Préparation du timestamp de matching (Paris -> UTC)
+        def get_ts_paris(row):
+            try:
+                dt = datetime.strptime(f"{row['Date']} {row['Heure']}", "%d/%m/%Y %H:%M")
+                return pytz.timezone("Europe/Paris").localize(dt).timestamp()
+            except: return None
 
-        # Gestion du délai (Wait Condition)
-        ts = row["ts_matching"]
-        if not ts: return False
-        
-        now_ts = datetime.now().timestamp()
-        
-        # SI l'arrivée est manquante (A ou Arr_H), on attend 1h (3600s)
-        # SINON (si c'est juste le départ), 10 min (600s) suffisent
-        if missing_a or missing_arr_h:
-            margin = 3600 
-        else:
-            margin = 600
+        df["ts_matching"] = df.apply(get_ts_paris, axis=1)
+
+        # 3. Logique d'éligibilité avec Compteur de Retries
+        def check_eligibility(row):
+            # A. Trop de retries ?
+            try:
+                retries = int(row.get("Nettoyage Retries") or 0)
+            except: retries = 0
+            if retries >= MAX_RETRIES: return False
+
+            # B. Déjà rempli ?
+            vides = ["", "Inconnu", "nan", "None", "None -> None"]
+            missing_de = str(row["De"]).strip() in vides
+            missing_a = str(row["A"]).strip() in vides
+            if not (missing_de or missing_a): return False
+
+            # C. Délai minimal (10 min)
+            ts = row["ts_matching"]
+            if not ts: return False
+            return ts < (datetime.now().timestamp() - 600)
+
+        df["is_eligible"] = df.apply(check_eligibility, axis=1)
+        df_todo = df[df["is_eligible"] == True].copy()
+
+        if df_todo.empty:
+            print("    ✅ Aucun vol à traiter (déjà remplis ou trop de retries).")
+            return
+
+        print(f"    🔍 {len(df_todo)} vol(s) à enrichir.")
+
+        # 4. Boucle d'enrichissement
+        success_count = 0
+        df_modified = False
+
+        for idx, row in df_todo.iterrows():
+            callsign = str(row["Identifiant Vol (Callsign)"]).strip()
+            icao     = str(row["Identifiant Appareil (ICAO24)"]).strip()
+            ts       = row["ts_matching"]
+
+            print(f"\n    -> {callsign} | {row['Date']} {row['Heure']}")
+
+            # Tentative FA
+            dep, arr, h_dep, h_arr, f_info = get_flightaware_web_data(callsign, ts)
+
+            # Fallback OpenSky
+            if (not dep or dep == "Inconnu") and icao and icao != "nan" and user:
+                print("        [Fallback] Tentative OpenSky...")
+                dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts, user, pwd)
+
+            if dep and dep != "Inconnu":
+                # SUCCÈS
+                df.at[idx, "De"]     = resolve_airport(dep)
+                df.at[idx, "A"]      = resolve_airport(arr) if arr else "Inconnu"
+                df.at[idx, "Dep_H"]  = h_dep if h_dep else ""
+                df.at[idx, "Arr_H"]  = h_arr if h_arr else ""
+                df.at[idx, "Source"] = "FlightAware (Web)" if f_info else "OpenSky (History)"
+                if f_info and f_info.get("aircraft"):
+                    if not df.at[idx, "Modèle Avion"] or df.at[idx, "Modèle Avion"] in ("", "nan"):
+                        df.at[idx, "Modèle Avion"] = f_info["aircraft"]
+                
+                print(f"        ✅ OK : {dep} -> {arr}")
+                success_count += 1
+            else:
+                # ÉCHEC : On incrémente le compteur de retries
+                try:
+                    current_retries = int(df.at[idx, "Nettoyage Retries"] or 0)
+                except: current_retries = 0
+                df.at[idx, "Nettoyage Retries"] = current_retries + 1
+                print(f"        ❌ Échec (Tentative {current_retries + 1}/{MAX_RETRIES})")
             
-        return ts < (now_ts - margin)
+            df_modified = True
+            time.sleep(2) # Politesse
 
-    # On applique la fonction et on crée le DataFrame de travail
-    df["is_eligible"] = df.apply(check_eligibility, axis=1)
-    df_todo = df[df["is_eligible"] == True].copy()
+        # 5. Sauvegarde
+        if df_modified:
+            # Nettoyage colonnes techniques avant envoi
+            cols_to_drop = [c for c in ["ts_matching", "is_eligible"] if c in df.columns]
+            df_final = df.drop(columns=cols_to_drop)
+            conn.update(worksheet=WORKSHEET, data=df_final.fillna(""))
+            print(f"\n💾 GSheets mis à jour ({success_count} succès).")
 
-    # --- ANCIEN CODE SUPPRIMÉ ICI (C'est ce qui causait l'erreur) ---
-
-    if df_todo.empty:
-        print("    ✅ Aucun vol 'Inconnu' à traiter pour le moment.")
-        if "ts_matching" in df.columns: df = df.drop(columns=["ts_matching"])
-        if "is_eligible" in df.columns: df = df.drop(columns=["is_eligible"])
-        return
-
-    print(f"    🔍 {len(df_todo)} vol(s) à enrichir.")
-
-    # 6. Boucle d'enrichissement
-    success_count = 0
-
-    for idx, row in df_todo.iterrows():
-        icao     = str(row["Identifiant Appareil (ICAO24)"]).strip()
-        callsign = str(row["Identifiant Vol (Callsign)"]).strip()
-        ts       = row["ts_matching"]
-
-        if not ts or not callsign or callsign == "nan":
-            continue
-
-        print(f"\n    -> {callsign} | Capture à {row['Heure']} (Paris)")
-
-        dep, arr, h_dep, h_arr, flight_info = None, None, None, None, None
-
-        # A. Tentative FlightAware (Nouveau Scraper JSON)
-        dep, arr, h_dep, h_arr, flight_info = get_flightaware_web_data(callsign, ts)
-
-        # B. Fallback OpenSky
-        if (not dep or dep == "Inconnu") and icao and icao != "nan" and user:
-            print("        [Fallback] Tentative OpenSky...")
-            dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts, user, pwd)
-            flight_info = None
-
-        # C. Mise à jour si succès
-        if dep and dep != "Inconnu":
-            df.at[idx, "De"]     = resolve_airport(dep)
-            df.at[idx, "A"]      = resolve_airport(arr) if arr else "Inconnu"
-            df.at[idx, "Dep_H"]  = h_dep if h_dep else ""
-            df.at[idx, "Arr_H"]  = h_arr if h_arr else ""
-            df.at[idx, "Source"] = "FlightAware (Web)" if flight_info else "OpenSky (History)"
-
-            # Enrichissement avion
-            if flight_info and flight_info.get("aircraft"):
-                if not df.at[idx, "Modèle Avion"] or df.at[idx, "Modèle Avion"] in ("", "nan"):
-                    df.at[idx, "Modèle Avion"] = flight_info["aircraft"]
-
-            success_count += 1
-            print(f"        ✅ OK : {dep} -> {arr}")
-        else:
-            print("        ❌ Match introuvable.")
-
-        time.sleep(1.5) # Politesse
-
-    # 7. Sauvegarde
-    if "ts_matching" in df.columns: df = df.drop(columns=["ts_matching"])
-    if "is_eligible" in df.columns: df = df.drop(columns=["is_eligible"])
-
-    if success_count > 0:
-        conn.update(worksheet=WORKSHEET, data=df.fillna(""))
-        print(f"\n💾 Mis à jour terminé : {success_count} vols corrigés.")
-    else:
-        print("\n   Rien n'a été modifié.")
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE : {e}")
+        import traceback
+        traceback.print_exc()
 
     print(f"\n{'='*60}\n✅ FIN\n{'='*60}")
 
