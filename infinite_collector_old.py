@@ -1,26 +1,16 @@
-import os
-import sys
-import warnings
-import json
-import math
-import time
-import pandas as pd
 import requests
-import logging
+import pandas as pd
+import os
+import time
+import math
+import json
 from datetime import datetime
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-# Désactiver ABSOLUMENT TOUS les logs internes (Streamlit, GSheets, etc.)
-logging.disable(logging.CRITICAL)
-warnings.filterwarnings("ignore")
-os.environ["STREAMLIT_LOG_LEVEL"] = "error"
-os.environ["STREAMLIT_SERVER_GATHER_USAGE_STATS"] = "false"
-
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from FlightRadar24 import FlightRadar24API
 from utils_aircraft import refresh_aircraft_db, get_aircraft_info
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # =============================================================================
 # CONFIGURATION DES ZONES (BBOX)
@@ -44,14 +34,13 @@ ALTITUDE_MAX = 3500
 HEARTBEAT_MAX = 180    
 MARGE_SECURITE = 30    
 
-# Schéma complet pour GSheet (avec colonnes Map et Raws)
+# NOUVELLES COLONNES AJOUTEES A LA FIN
 COLS_GSHEET = [
     "Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie", "Modèle Avion", 
     "Immatriculation", "Identifiant Appareil (ICAO24)", "Altitude (m)", 
-    "Evolution Verticale", "Lat", "Lon", "Heading", "De", "A", "Dep_H", "Arr_H", 
-    "Source", "Planespotters", "Positions", 
-    "Airlabs Info", "OpenSky State Info", "Hexdb Route Info", 
-    "Hexdb Aircraft Info", "Planespotters Info", "Aircraft DB Info"
+    "Evolution Verticale", "De", "A", "Dep_H", "Arr_H", "Source", 
+    "Planespotters", "Positions", "Airlabs Info", 
+    "OpenSky State Info", "Hexdb Route Info", "Aircraft DB Info"
 ]
 
 # =============================================================================
@@ -94,7 +83,7 @@ def estimate_eta(lat, lon, heading, velocity):
     return None
 
 # =============================================================================
-# ENRICHISSEMENT & API EXTERNES
+# ENRICHISSEMENT & API EXTERNES (Avec récupération RAW)
 # =============================================================================
 
 def clean(v) -> str:
@@ -106,28 +95,28 @@ def get_flight_airlabs(icao24: str) -> dict | None:
     try:
         api_key = st.secrets.get("AIRLABS_API_KEY", "")
         if not api_key: return None
+        
         url = f"https://airlabs.co/api/v9/flights?hex={icao24.lower()}&api_key={api_key}"
         print(f"    [API AirLabs]   requête -> {url}")
+        
         r = requests.get(url, timeout=10)
-        print(f"    [API AirLabs]   réponse status -> {r.status_code}")
         if r.status_code == 200:
             data = r.json()
             if "response" in data and isinstance(data["response"], list) and len(data["response"]) > 0:
                 print(f"    [API AirLabs]   réponse OK")
                 return data["response"][0]
-        print(f"    [API AirLabs]   aucun résultat ou erreur")
+        print(f"    [API AirLabs]   aucun résultat ou HTTP {r.status_code}")
     except Exception as e:
         print(f"    [API AirLabs]   exception : {e}")
     return None
 
 def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
+    """Retourne Dep, Arr et le JSON brut."""
     cs = callsign.strip().upper()
     if not cs or cs == "INCONNU": return None
     url = f"https://hexdb.io/api/v1/route/icao/{cs}"
-    print(f"    [API hexdb]     requête route -> {url}")
     try:
         r = requests.get(url, timeout=5)
-        print(f"    [API hexdb]     réponse route status -> {r.status_code}")
         if r.status_code == 200:
             data = r.json()
             raw_json = json.dumps(data, ensure_ascii=False)
@@ -135,38 +124,33 @@ def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
             parts = route.split("-")
             if len(parts) == 2 and all(parts):
                 return parts[0], parts[1], raw_json
-    except Exception as e:
-        print(f"    [API hexdb]     exception route : {e}")
+    except: pass
     return None
 
 def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str, str]:
-    url = f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}"
-    print(f"    [API hexdb]     requête aircraft -> {url}")
+    """Retourne Owner, Type, Reg, et le JSON brut."""
     try:
+        url = f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}"
         r = requests.get(url, timeout=5)
-        print(f"    [API hexdb]     réponse aircraft status -> {r.status_code}")
         if r.status_code == 200:
             d = r.json()
             raw_json = json.dumps(d, ensure_ascii=False)
             return d.get("RegisteredOwners", ""), d.get("Type", ""), d.get("Registration", ""), raw_json
-    except Exception as e:
-        print(f"    [API hexdb]     exception aircraft : {e}")
+    except: pass
     return "", "", "", ""
 
 def get_aircraft_planespotters(icao24: str) -> tuple[str, str, str]:
-    url = f"https://api.planespotters.net/pub/photos/hex/{icao24.lower()}"
-    print(f"    [API PlaneSp]   requête photos -> {url}")
+    """Retourne Airline, Type, et le JSON brut."""
     try:
+        url = f"https://api.planespotters.net/pub/photos/hex/{icao24.lower()}"
         r = requests.get(url, timeout=5)
-        print(f"    [API PlaneSp]   réponse status -> {r.status_code}")
         if r.status_code == 200:
             data = r.json()
             raw_json = json.dumps(data, ensure_ascii=False)
             if data.get("photos"):
                 info = data["photos"][0]
                 return info.get("airline", {}).get("name", ""), info.get("aircraft_type", ""), raw_json
-    except Exception as e:
-        print(f"    [API PlaneSp]   exception : {e}")
+    except: pass
     return "", "", ""
 
 _airport_cache: dict[str, str] = {}
@@ -189,24 +173,28 @@ def resolve_airport(code: str) -> str:
     return code
 
 def get_real_flight_info(icao24):
-    """Enrichissement et récupération de tous les raws individuels."""
+    """Enrichissement et agrégation des données brutes DB."""
     make, model, reg = get_aircraft_info(icao24)
     make, model, reg = clean(make), clean(model), clean(reg)
-    hexdb_raw, ps_raw = "", ""
+    raw_db_dict = {}
 
     if not make or not model or not reg:
         hx_make, hx_model, hx_reg, hx_raw = get_aircraft_hexdb(icao24)
-        hexdb_raw = hx_raw
+        if hx_raw: raw_db_dict["hexdb"] = json.loads(hx_raw)
+        
         if not make: make = clean(hx_make)
         if not model: model = clean(hx_model)
         if not reg: reg = clean(hx_reg)
+
         if not make or not model:
-            ps_make, ps_model, p_raw = get_aircraft_planespotters(icao24)
-            ps_raw = p_raw
+            ps_make, ps_model, ps_raw = get_aircraft_planespotters(icao24)
+            if ps_raw: raw_db_dict["planespotters"] = json.loads(ps_raw)
+            
             if not make: make = clean(ps_make)
             if not model: model = clean(ps_model)
             
-    return make, model, reg, hexdb_raw, ps_raw
+    raw_db_json = json.dumps(raw_db_dict, ensure_ascii=False) if raw_db_dict else ""
+    return make, model, reg, raw_db_json
 
 # =============================================================================
 # GESTION DU TOKEN OPENSKY (OAuth2)
@@ -261,10 +249,7 @@ def run_scan():
         token = get_opensky_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         url = f"https://opensky-network.org/api/states/all?lamin={BBOX_WATCH['lamin']}&lomin={BBOX_WATCH['lomin']}&lamax={BBOX_WATCH['lamax']}&lomax={BBOX_WATCH['lomax']}"
-        
-        print(f"    [API OpenSky]   requête states -> {url}")
         response = session.get(url, headers=headers, timeout=30)
-        print(f"    [API OpenSky]   réponse status -> {response.status_code}")
         
         credits_restants = response.headers.get("X-Rate-Limit-Remaining", "Inconnu")
         print(f"💰 CRÉDITS OPENSKY : {credits_restants}")
@@ -279,7 +264,7 @@ def run_scan():
         candidates = []
         for avion in states:
             icao24, callsign, au_sol = avion[0], str(avion[1]).strip() or "Inconnu", avion[8]
-            lat, lon, heading, velocity = avion[6], avion[5], avion[10] or 0, avion[9]
+            lat, lon, heading, velocity = avion[6], avion[5], avion[10], avion[9]
             altitude = avion[13] or avion[7] or 0
             
             if altitude < ALTITUDE_MAX:
@@ -301,7 +286,7 @@ def run_scan():
                             potential_sleep = max(30, int(eta) - MARGE_SECURITE)
                             type_appro = "APPROCHE"
                         else:
-                            potential_sleep = int(eta) + 5
+                            potential_sleep = int(eta)
                             type_appro = "INTERCEPTION"
                         print(f"  ➡️ [{type_appro}] {callsign} ({icao24}) {info_nav}. ETA: {eta_min}m {eta_sec}s. Réveil: {potential_sleep}s")
                         if potential_sleep < next_sleep:
@@ -326,7 +311,7 @@ def run_scan():
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude = int(avion[13] or avion[7] or 0)
-                v_rate, lat, lon, heading = avion[11] or 0, avion[6], avion[5], avion[10] or 0
+                v_rate, lat, lon = avion[11] or 0, avion[6], avion[5]
                 pos_str, trend = f"({lat:.4f}, {lon:.4f})", ("⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable"))
 
                 # Sauvegarde du JSON OpenSky du vol
@@ -341,15 +326,14 @@ def run_scan():
                                 df.at[idx, "Positions"] = (str(df.at[idx, "Positions"]) + " | " + pos_str).strip(" | ")
                                 print(f"    ✅ Position ajoutée pour {callsign}")
                             df.at[idx, "Altitude (m)"], df.at[idx, "Evolution Verticale"] = altitude, trend
-                            df.at[idx, "Lat"], df.at[idx, "Lon"], df.at[idx, "Heading"] = lat, lon, heading
-                            df.at[idx, "OpenSky State Info"] = opensky_state_raw
+                            df.at[idx, "OpenSky State Info"] = opensky_state_raw # Met à jour la position raw aussi
                             updated = True
                             break
                     except: pass
                 
                 if not updated:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
-                    make, model, reg, hx_raw, ps_raw = get_real_flight_info(icao24)
+                    make, model, reg, db_info_raw = get_real_flight_info(icao24)
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
                     
                     al_data = get_flight_airlabs(icao24)
@@ -359,8 +343,14 @@ def run_scan():
                         h_dep = al_data.get("dep_time") or "--:--"
                         h_arr = al_data.get("arr_time") or "--:--"
                         source = "AirLabs"
+                        
+                        # --- MODIFICATION DE LA CASCADE POUR LA COMPAGNIE ---
                         if not make or make == "Inconnu":
-                            make = clean(al_data.get("airline_name")) or clean(al_data.get("airline_icao"))
+                            make = clean(al_data.get("airline_name"))
+                            if not make: make = clean(al_data.get("airline_icao"))
+                            if not make: make = clean(al_data.get("airline_iata"))
+                        # ----------------------------------------------------
+                        
                         if not model or model == "Inconnu": model = clean(al_data.get("model"))
                         if not reg or reg == "Inconnu": reg = clean(al_data.get("reg_number"))
                         airlabs_raw = json.dumps(al_data, ensure_ascii=False)
@@ -375,21 +365,17 @@ def run_scan():
                         "Date": now_dt.strftime("%d/%m/%Y"), "Heure": now_dt.strftime("%H:%M"),
                         "Identifiant Vol (Callsign)": callsign, "Compagnie": make, "Modèle Avion": model, "Immatriculation": reg,
                         "Identifiant Appareil (ICAO24)": icao24, "Altitude (m)": altitude, "Evolution Verticale": trend,
-                        "Lat": lat, "Lon": lon, "Heading": heading,
                         "De": resolve_airport(dep), "A": resolve_airport(arr), "Dep_H": h_dep, "Arr_H": h_arr,
                         "Source": source, "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")',
                         "Positions": pos_str, "Airlabs Info": airlabs_raw,
                         "OpenSky State Info": opensky_state_raw,
                         "Hexdb Route Info": hexdb_route_raw,
-                        "Hexdb Aircraft Info": hx_raw,
-                        "Planespotters Info": ps_raw,
-                        "Aircraft DB Info": "" # Information statique déjà dans les autres colonnes
+                        "Aircraft DB Info": db_info_raw
                     })
 
             if new_entries or updated:
                 df_final = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
-                df_final = df_final.reindex(columns=COLS_GSHEET).fillna("")
-                df_final = df_final.drop_duplicates(subset=["Date", "Heure", "Identifiant Vol (Callsign)"], keep="last").tail(2000)
+                df_final = df_final.drop_duplicates(subset=["Date", "Heure", "Identifiant Vol (Callsign)"], keep="last").tail(2000).fillna("")
                 conn.update(worksheet="Vols_Joinville", data=df_final)
                 print(f"    💾 Google Sheet mis à jour.")
     except Exception as e:

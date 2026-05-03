@@ -6,20 +6,24 @@ Gère les retries pour éviter les bans et utilise une cascade de sources.
 """
 
 import os
+import sys
 import warnings
 import logging
+import re
+import json
+import time
+import requests
+import pandas as pd
+import streamlit as st
+from streamlit_gsheets import GSheetsConnection
+from datetime import datetime, timedelta
+from curl_cffi import requests as cf_requests
+import pytz
 
 # Désactiver ABSOLUMENT TOUS les logs internes (Streamlit, GSheets, etc.)
 logging.disable(logging.CRITICAL)
 warnings.filterwarnings("ignore")
 os.environ["STREAMLIT_LOG_LEVEL"] = "error"
-
-import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-import time
-from datetime import datetime, timedelta
-from curl_cffi import requests as cf_requests
-import pytz
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -247,11 +251,6 @@ def main():
                 return False
 
             # B. Est-ce que la donnée actuelle est complète et fiable ?
-            # On nettoie si :
-            # - La destination/départ est "Inconnu" (case insensitive)
-            # - OU si l'heure de départ/arrivée est manquante ou par défaut "--:--"
-            # - OU si la source est jugée non fiable (hexdb, OpenSky Live, ou vide)
-            
             vides = ["", "inconnu", "nan", "none", "none -> none", "?", "inconnue", "--:--"]
             
             val_de = str(row.get("De") or "").strip().lower()
@@ -268,7 +267,7 @@ def main():
             if not (missing_data or unreliable_source):
                 return False
 
-            # C. Délai minimal (10 min pour laisser le vol se terminer)
+            # C. Délai minimal (10 min)
             ts = row.get("ts_matching")
             if not ts: 
                 return False
@@ -285,7 +284,7 @@ def main():
         df_todo = df[df["is_eligible"] == True].copy()
 
         if df_todo.empty:
-            print("    ✅ Aucun vol à traiter (déjà remplis ou trop de retries).")
+            print("    ✅ Aucun vol à traiter.")
             return
 
         print(f"    🔍 {len(df_todo)} vol(s) à enrichir.")
@@ -335,7 +334,6 @@ def main():
 
         # 5. Sauvegarde
         if df_modified:
-            # Nettoyage colonnes techniques avant envoi
             cols_to_drop = [c for c in ["ts_matching", "is_eligible"] if c in df.columns]
             df_final = df.drop(columns=cols_to_drop)
             conn.update(worksheet=WORKSHEET, data=df_final.fillna(""))
