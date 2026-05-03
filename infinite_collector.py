@@ -290,7 +290,7 @@ def run_scan():
                             potential_sleep = max(30, int(eta) - MARGE_SECURITE)
                             type_appro = "APPROCHE"
                         else:
-                            potential_sleep = int(eta) + 5
+                            potential_sleep = int(eta)
                             type_appro = "INTERCEPTION"
                         print(f"  ➡️ [{type_appro}] {callsign} ({icao24}) {info_nav}. ETA: {eta_min}m {eta_sec}s. Réveil: {potential_sleep}s")
                         if potential_sleep < next_sleep:
