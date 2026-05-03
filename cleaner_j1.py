@@ -5,7 +5,11 @@ Nettoyeur intelligent pour enrichir les données de vol a posteriori.
 Gère les retries pour éviter les bans et utilise une cascade de sources.
 """
 
-import re
+import logging
+# Supprimer les logs Streamlit/GSheets en mode bare
+logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.state.session_state_proxy").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
 import time
 import json
 import requests
@@ -229,22 +233,52 @@ def main():
 
         # 3. Logique d'éligibilité avec Compteur de Retries
         def check_eligibility(row):
+            callsign = str(row.get("Identifiant Vol (Callsign)") or "Unknown")
+            
             # A. Trop de retries ?
             try:
-                retries = int(row.get("Nettoyage Retries") or 0)
-            except: retries = 0
-            if retries >= MAX_RETRIES: return False
+                retries_raw = row.get("Nettoyage Retries")
+                retries = int(retries_raw) if (retries_raw and str(retries_raw).strip() != "") else 0
+            except: 
+                retries = 0
+            
+            if retries >= MAX_RETRIES:
+                return False
 
-            # B. Déjà rempli ?
-            vides = ["", "Inconnu", "nan", "None", "None -> None"]
-            missing_de = str(row["De"]).strip() in vides
-            missing_a = str(row["A"]).strip() in vides
-            if not (missing_de or missing_a): return False
+            # B. Est-ce que la donnée actuelle est complète et fiable ?
+            # On nettoie si :
+            # - La destination/départ est "Inconnu" (case insensitive)
+            # - OU si l'heure de départ/arrivée est manquante ou par défaut "--:--"
+            # - OU si la source est jugée non fiable (hexdb, OpenSky Live, ou vide)
+            
+            vides = ["", "inconnu", "nan", "none", "none -> none", "?", "inconnue", "--:--"]
+            
+            val_de = str(row.get("De") or "").strip().lower()
+            val_a = str(row.get("A") or "").strip().lower()
+            val_dep_h = str(row.get("Dep_H") or "").strip().lower()
+            val_arr_h = str(row.get("Arr_H") or "").strip().lower()
+            
+            missing_data = (val_de in vides or val_a in vides or val_dep_h in vides or val_arr_h in vides)
+            
+            source = str(row.get("Source") or "").strip()
+            SOURCES_NON_FIABLES = ["hexdb", "OpenSky (Live)", ""]
+            unreliable_source = source in SOURCES_NON_FIABLES
 
-            # C. Délai minimal (10 min)
-            ts = row["ts_matching"]
-            if not ts: return False
-            return ts < (datetime.now().timestamp() - 600)
+            if not (missing_data or unreliable_source):
+                return False
+
+            # C. Délai minimal (10 min pour laisser le vol se terminer)
+            ts = row.get("ts_matching")
+            if not ts: 
+                return False
+            
+            is_ready = ts < (datetime.now().timestamp() - 600)
+            
+            if is_ready:
+                reason = "Data missing" if missing_data else f"Unreliable source ({source})"
+                print(f"    [Eligible] {callsign} ({reason}, Retries: {retries})")
+            
+            return is_ready
 
         df["is_eligible"] = df.apply(check_eligibility, axis=1)
         df_todo = df[df["is_eligible"] == True].copy()

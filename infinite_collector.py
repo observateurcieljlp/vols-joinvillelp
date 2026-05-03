@@ -1,4 +1,8 @@
-import requests
+import logging
+# Supprimer les logs Streamlit/GSheets en mode bare
+logging.getLogger("streamlit.runtime.scriptrunner").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.state.session_state_proxy").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
 import pandas as pd
 import os
 import time
