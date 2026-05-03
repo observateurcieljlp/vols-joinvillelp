@@ -94,131 +94,54 @@ try:
         # Logique de coloration et taille pour la carte (plus robuste via apply)
         def set_map_color(row):
             if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
-                return [255, 0, 0, 230] # Rouge si sélectionné
-            return [0, 120, 255, 160] # Bleu par défaut
-            
-        def set_map_size(row):
-            if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
-                return 120
-            return 60
+                return [255, 0, 0, 255] # Rouge si sélectionné
+            return [0, 100, 255, 200] # Bleu par défaut
 
         map_df['color'] = map_df.apply(set_map_color, axis=1)
-        map_df['size'] = map_df.apply(set_map_size, axis=1)
 
+        # Configuration de l'icône Avion
+        # On utilise une URL d'icône SVG pour un avion vue de dessus
+        ICON_URL = "https://raw.githubusercontent.com/visgl/deck.gl-data/master/website/icon-atlas.png"
+        # Coordonnées dans l'atlas pour l'icône de marqueur (on va plutôt utiliser une flèche SVG propre)
+        # Mais pour faire simple et robuste sans dépendances, on peut utiliser un TextLayer d'avion Unicode
+        # ou un IconLayer avec une icône d'avion standard.
+        
         # Calques Pydeck
-        # 1. Point d'impact
-        layer_points = pdk.Layer(
-            "ScatterplotLayer",
-            map_df,
-            get_position=["Lon", "Lat"],
-            get_color="color",
-            get_radius="size",
-            pickable=True,
-        )
-
-        # 2. Vecteur de direction (uniquement si le Heading est présent)
-        map_layers = [layer_points]
-        if not map_df['Heading'].isna().all():
-            layer_arrows = pdk.Layer(
-                "TextLayer",
-                map_df.dropna(subset=['Heading']),
-                get_position=["Lon", "Lat"],
-                get_text="arrow",
-                get_color="color",
-                get_angle="-Heading",
-                get_size=25,
-                alignment_baseline="'center'",
-            )
-            map_layers.append(layer_arrows)
-
-        # État de la vue (centrage intelligent)
-        # On ne centre sur l'avion que si ses coordonnées sont valides (pas NaN)
-        has_valid_coords = (selected_row is not None and 
-                            not pd.isna(selected_row['Lat']) and 
-                            not pd.isna(selected_row['Lon']))
-
-        view_state = pdk.ViewState(
-            latitude=selected_row['Lat'] if has_valid_coords else JOINVILLE_CENTER["lat"],
-            longitude=selected_row['Lon'] if has_valid_coords else JOINVILLE_CENTER["lon"],
-            zoom=14 if has_valid_coords else 13,
-            pitch=0,
-        )
-
-        # --- Préparation des trajectoires (Breadcrumbs) ---
-        def parse_positions(pos_str):
-            if not pos_str or pd.isna(pos_str): return []
-            paths = []
-            # Format: (lat, lon) | (lat, lon)
-            points = str(pos_str).split(" | ")
-            for p in points:
-                try:
-                    # Extraction des nombres via regex
-                    coords = re.findall(r"[-+]?\d*\.\d+|\d+", p)
-                    if len(coords) >= 2:
-                        # Pydeck attend [lon, lat]
-                        paths.append([float(coords[1]), float(coords[0])])
-                except: continue
-            return paths
-
-        # On crée un DataFrame pour les trajets
-        path_data = []
-        for _, row in df_jour.iterrows():
-            path = parse_positions(row.get('Positions', ''))
-            if len(path) > 1:
-                is_selected = (selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)'])
-                path_data.append({
-                    "path": path,
-                    "color": [255, 0, 0, 200] if is_selected else [0, 120, 255, 100],
-                    "width": 5 if is_selected else 2,
-                    "callsign": row['Identifiant Vol (Callsign)']
-                })
-
-        # Calque des trajets (Lignes)
+        # 1. Trajectoires
         layer_paths = pdk.Layer(
             "PathLayer",
             path_data,
             get_path="path",
             get_color="color",
-            get_width="width",
+            get_width=3,
             width_min_pixels=2,
             pickable=True
         )
 
-        # Calque des points (Scatter)
-        layer_points = pdk.Layer(
-            "ScatterplotLayer",
+        # 2. Icônes Avion (Remplacement des cercles)
+        # On utilise un TextLayer avec l'avion Unicode ✈ qui est très bien géré
+        layer_aircraft = pdk.Layer(
+            "TextLayer",
             map_df,
             get_position=["Lon", "Lat"],
+            get_text="icon",
             get_color="color",
-            get_radius="size",
+            get_angle="-Heading + 90", # On ajuste car l'icône ✈ pointe vers la droite par défaut
+            get_size=30,
             pickable=True,
         )
-
-        # Construction de la liste des calques
-        map_layers = [layer_paths, layer_points]
-
-        # Ajout du calque de direction seulement si le Heading est présent
-        if not map_df['Heading'].isna().all():
-            layer_arrows = pdk.Layer(
-                "TextLayer",
-                map_df.dropna(subset=['Heading']),
-                get_position=["Lon", "Lat"],
-                get_text="arrow",
-                get_color="color",
-                get_angle="-Heading",
-                get_size=25,
-                alignment_baseline="'center'",
-            )
-            map_layers.append(layer_arrows)
+        map_df['icon'] = "✈"
 
         # Rendu de la carte
+        map_layers = [layer_paths, layer_aircraft]
+        
         if map_df.empty:
-            st.warning("⚠️ Aucune coordonnée précise (Lat/Lon) n'est encore disponible pour les vols de cette journée.")
+            st.warning("⚠️ Aucune coordonnée précise (Lat/Lon) n'est encore disponible.")
         
         st.pydeck_chart(pdk.Deck(
             map_style=None,
             initial_view_state=view_state,
-            layers=map_layers, # Utilisation de la liste dynamique corrigée
+            layers=map_layers,
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
@@ -239,6 +162,10 @@ try:
             icao = selected_row['Identifiant Appareil (ICAO24)']
             if icao:
                 col_a.link_button("🛰️ Trace ADSB", f"https://globe.adsbexchange.com/?icao={icao}")
+            
+            immat = selected_row['Immatriculation']
+            if immat:
+                col_b.link_button("📷 Photos", f"https://www.planespotters.net/search?q={immat}")
             
             # --- INSPECTEUR DE DONNÉES BRUTES ---
             st.sidebar.markdown("---")
