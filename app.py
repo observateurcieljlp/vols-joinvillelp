@@ -71,7 +71,6 @@ try:
         # --- Zone Carte ---
         JOINVILLE_CENTER = {"lat": 48.818, "lon": 2.47}
         
-        # Définition du rectangle de la BBOX Joinville pour la carte
         BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
         bbox_coords = [
             [BBOX_JOINVILLE["lomin"], BBOX_JOINVILLE["lamin"]],
@@ -126,7 +125,7 @@ try:
 
         map_df['color'] = map_df.apply(set_map_color, axis=1)
 
-        # --- Préparation des trajectoires (Breadcrumbs) ---
+        # --- Préparation des trajectoires ---
         def parse_positions(pos_str):
             if not pos_str or pd.isna(pos_str): return []
             paths = []
@@ -149,11 +148,9 @@ try:
                     "width": 5 if is_sel else 2
                 })
 
-        # Calques
         layer_paths = pdk.Layer("PathLayer", path_data, get_path="path", get_color="color", get_width="width", width_min_pixels=2)
         layer_aircraft = pdk.Layer("TextLayer", map_df, get_position=["Lon", "Lat"], get_text="'✈'", get_color="color", get_angle="-Heading + 90", get_size=32, pickable=True)
 
-        # Vue
         has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
         view_state = pdk.ViewState(
             latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
@@ -169,6 +166,13 @@ try:
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
+        # --- ANALYSE DE LA FLOTTE ---
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📊 Part des compagnies")
+        if not df_jour.empty:
+            stats_comp = df_jour['Compagnie'].value_counts()
+            st.sidebar.bar_chart(stats_comp)
+
         # 5. Panneau de détails
         st.sidebar.markdown("---")
         st.sidebar.subheader("🎨 Légende")
@@ -180,8 +184,7 @@ try:
         """)
         
         if not df_jour.empty:
-            last_time = df_jour['Heure'].max()
-            st.sidebar.caption(f"Dernière capture : {last_time}")
+            st.sidebar.caption(f"Dernière capture : {df_jour['Heure'].max()}")
 
         if selected_row is not None:
             st.sidebar.markdown("---")
@@ -199,20 +202,10 @@ try:
             
             with st.sidebar.expander("🛠️ Données techniques (JSON)"):
                 def safe_json_display(label, data):
-                    if data is None or pd.isna(data) or str(data).strip() == "":
-                        return
-                    st.write(f"**{label}:**")
-                    try:
-                        # Si c'est déjà un dictionnaire/liste (objet Python)
-                        if isinstance(data, (dict, list)):
-                            st.json(data)
-                        else:
-                            # Tentative de parsing si c'est une chaîne
-                            st.json(json.loads(str(data)))
-                    except Exception:
-                        # Fallback en texte brut si le JSON est malformé
-                        st.code(str(data), language="text")
-
+                    if data and not pd.isna(data) and str(data).strip() != "":
+                        st.write(f"**{label}:**")
+                        try: st.json(json.loads(str(data)) if isinstance(data, str) else data)
+                        except: st.code(str(data))
                 safe_json_display("AirLabs", selected_row.get('Airlabs Info'))
                 safe_json_display("OpenSky", selected_row.get('OpenSky State Info'))
                 safe_json_display("HexDB Route", selected_row.get('Hexdb Route Info'))
