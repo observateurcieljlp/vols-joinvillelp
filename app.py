@@ -53,7 +53,8 @@ else:
     # Gestion de la sélection
     selected_row = None
     if event and event.selection.rows:
-        selected_row = df_jour.iloc[event.selection.rows[0]]
+        selected_idx = event.selection.rows[0]
+        selected_row = df_jour.iloc[selected_idx]
 
     # 4. Carte
     st.subheader("📍 Position sur la carte")
@@ -71,7 +72,6 @@ else:
     map_df['color'] = map_df.apply(set_map_color, axis=1)
 
     # Icône Avion
-    ICON_URL = "https://raw.githubusercontent.com/visgl/deck.gl-data/master/website/icon-atlas.png"
     icon_data = {
         "url": "https://img.icons8.com/color/96/000000/airplane-mode-on.png",
         "width": 128,
@@ -80,18 +80,45 @@ else:
     }
     map_df["icon_data"] = [icon_data] * len(map_df)
 
-    view_state = pdk.ViewState(latitude=48.818, longitude=2.47, zoom=14)
+    # --- Zone Carte ---
+    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
+    
+    # Couleur et Taille basées sur la sélection
+    def set_map_color(row):
+        if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
+            return [255, 0, 0, 255] # Rouge
+        trend = str(row.get('Evolution Verticale', '')).lower()
+        if 'montée' in trend: return [46, 204, 113, 200]
+        if 'descente' in trend: return [230, 126, 34, 200]
+        return [0, 100, 255, 180]
+
+    def set_map_size(row):
+        if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
+            return 80 # Plus gros si sélectionné
+        return 40
+
+    map_df['color'] = map_df.apply(set_map_color, axis=1)
+    map_df['size'] = map_df.apply(set_map_size, axis=1)
+
+    # État de la vue
+    has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
+    view_state = pdk.ViewState(
+        latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
+        longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
+        zoom=14,
+        pitch=0,
+    )
     
     st.pydeck_chart(pdk.Deck(
         map_style=None,
         initial_view_state=view_state,
         layers=[
-            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size=40, get_angle="90-Heading", pickable=True)
+            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size="size", get_color="color", get_angle="-Heading", pickable=True)
         ],
         tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
     ))
 
-    # 5. Légende et Analytics
+    # 5. Légende et Analytics sous la carte
     col_l1, col_l2 = st.columns(2)
     with col_l1:
         st.markdown("### 🎨 Légende")
