@@ -61,7 +61,7 @@ try:
         
         # 5. Nettoyage de l'affichage
         # On définit ici les colonnes qu'on veut vraiment montrer
-        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)','Compagnie','Modèle Avion','De','A', 'Trajet'] 
+        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)','Compagnie','Modèle Avion','De','A', 'Radar', 'Infos'] 
        
         # Assurez-vous que ces noms correspondent exactement à votre Google Sheet
         
