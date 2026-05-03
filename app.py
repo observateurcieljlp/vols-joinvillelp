@@ -67,12 +67,11 @@ try:
         
         # 6. Affichage du tableau avec configuration spéciale pour le lien
         st.dataframe(
-            df_jour[cols_finales],
+            df_jour[colonnes_visibles],
             column_config={
                 "Radar": st.column_config.LinkColumn("Tracé Précis", display_text="🛰️ Trace ADSB"),
                 "Infos": st.column_config.LinkColumn("Historique", display_text="✈️ FlightAware"),
                 "Altitude (m)": st.column_config.NumberColumn(format="%d m"),
-                "DateHeure": st.column_config.DatetimeColumn("Heure", format="HH:mm")
             },
             use_container_width=True,
             hide_index=True
