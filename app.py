@@ -51,6 +51,10 @@ try:
         jours_dispos = sorted(df['Date'].unique(), reverse=True)
         jour_choisi = st.sidebar.selectbox("Choisir une journée", jours_dispos)
         
+        # Bouton de rafraîchissement
+        if st.sidebar.button("🔄 Actualiser les données"):
+            st.rerun()
+
         # Filtrage
         df_jour = df[df['Date'] == jour_choisi].copy().reset_index(drop=True)
 
@@ -66,6 +70,28 @@ try:
         
         # --- Zone Carte ---
         JOINVILLE_CENTER = {"lat": 48.818, "lon": 2.47}
+        
+        # Définition du rectangle de la BBOX Joinville pour la carte
+        BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
+        bbox_coords = [
+            [BBOX_JOINVILLE["lomin"], BBOX_JOINVILLE["lamin"]],
+            [BBOX_JOINVILLE["lomax"], BBOX_JOINVILLE["lamin"]],
+            [BBOX_JOINVILLE["lomax"], BBOX_JOINVILLE["lamax"]],
+            [BBOX_JOINVILLE["lomin"], BBOX_JOINVILLE["lamax"]],
+            [BBOX_JOINVILLE["lomin"], BBOX_JOINVILLE["lamin"]]
+        ]
+        
+        layer_bbox = pdk.Layer(
+            "PolygonLayer",
+            [{"polygon": bbox_coords}],
+            get_polygon="polygon",
+            get_fill_color=[255, 0, 0, 30],
+            get_line_color=[255, 0, 0, 150],
+            line_width_min_pixels=2,
+            stroked=True,
+            filled=True,
+        )
+
         map_df = df_jour.dropna(subset=['Lat', 'Lon']).copy()
         
         # Affichage du tableau avec sélection interactive
@@ -139,11 +165,24 @@ try:
         st.pydeck_chart(pdk.Deck(
             map_style=None,
             initial_view_state=view_state,
-            layers=[layer_paths, layer_aircraft],
+            layers=[layer_bbox, layer_paths, layer_aircraft],
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
         # 5. Panneau de détails
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("🎨 Légende")
+        st.sidebar.markdown("""
+        - 🟢 **Montée** (Décollage)
+        - 🟠 **Descente** (Approche)
+        - 🔵 **Stable** (Croisière)
+        - 🔴 **Sélectionné**
+        """)
+        
+        if not df_jour.empty:
+            last_time = df_jour['Heure'].max()
+            st.sidebar.caption(f"Dernière capture : {last_time}")
+
         if selected_row is not None:
             st.sidebar.markdown("---")
             st.sidebar.subheader(f"🔍 Détails : {selected_row['Identifiant Vol (Callsign)']}")
@@ -159,18 +198,27 @@ try:
                 col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
             
             with st.sidebar.expander("🛠️ Données techniques (JSON)"):
-                def safe_json(label, data):
-                    if data and not pd.isna(data):
-                        st.write(f"**{label}:**")
-                        try: st.json(json.loads(str(data)) if isinstance(data, str) else data)
-                        except: st.code(str(data))
+                def safe_json_display(label, data):
+                    if data is None or pd.isna(data) or str(data).strip() == "":
+                        return
+                    st.write(f"**{label}:**")
+                    try:
+                        # Si c'est déjà un dictionnaire/liste (objet Python)
+                        if isinstance(data, (dict, list)):
+                            st.json(data)
+                        else:
+                            # Tentative de parsing si c'est une chaîne
+                            st.json(json.loads(str(data)))
+                    except Exception:
+                        # Fallback en texte brut si le JSON est malformé
+                        st.code(str(data), language="text")
+
                 safe_json_display("AirLabs", selected_row.get('Airlabs Info'))
                 safe_json_display("OpenSky", selected_row.get('OpenSky State Info'))
                 safe_json_display("HexDB Route", selected_row.get('Hexdb Route Info'))
                 safe_json_display("HexDB Aircraft", selected_row.get('Hexdb Aircraft Info'))
                 safe_json_display("PlaneSpotters", selected_row.get('Planespotters Info'))
                 safe_json_display("Base Locale (OpenSky)", selected_row.get('Aircraft DB Info'))
-
 
 except Exception as e:
     st.error(f"Erreur d'affichage : {e}")
