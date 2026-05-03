@@ -47,16 +47,17 @@ else:
     # 3. Tableau
     st.subheader("📋 Liste des survols")
     cols_tableau = ['Heure', 'Identifiant Vol (Callsign)', 'Immatriculation', 'Compagnie', 'Modèle Avion', 'Altitude (m)', 'Evolution Verticale', 'De', 'A', 'Source']
-    event = st.dataframe(df_jour[cols_tableau], use_container_width=True, on_select="rerun", selection_mode="single-row")
+    event = st.dataframe(df_jour[cols_tableau], use_container_width=True, on_select="rerun", selection_mode="single-row",
+                         column_config={"Altitude (m)": st.column_config.NumberColumn(format="%d m"), "Source": st.column_config.TextColumn("Fiabilité")})
+
+    # Gestion de la sélection
+    selected_row = None
+    if event and event.selection.rows:
+        selected_row = df_jour.iloc[event.selection.rows[0]]
 
     # 4. Carte
     st.subheader("📍 Position sur la carte")
     map_df = df_jour.dropna(subset=['Lat', 'Lon']).copy()
-    
-    selected_row = None
-    if event and event.selection.rows:
-        selected_idx = event.selection.rows[0]
-        selected_row = df_jour.iloc[selected_idx]
 
     # Couleur
     def set_map_color(row):
@@ -69,32 +70,28 @@ else:
 
     map_df['color'] = map_df.apply(set_map_color, axis=1)
 
-    # Calcul dynamique du centre sur Joinville
-    BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
-    JOINVILLE_CENTER = {
-        "lat": (BBOX_JOINVILLE["lamin"] + BBOX_JOINVILLE["lamax"]) / 2,
-        "lon": (BBOX_JOINVILLE["lomin"] + BBOX_JOINVILLE["lomax"]) / 2
+    # Icône Avion
+    ICON_URL = "https://raw.githubusercontent.com/visgl/deck.gl-data/master/website/icon-atlas.png"
+    icon_data = {
+        "url": "https://img.icons8.com/color/96/000000/airplane-mode-on.png",
+        "width": 128,
+        "height": 128,
+        "anchorY": 64,
     }
-    
-    # État de la vue (centrage intelligent)
-    has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
-    view_state = pdk.ViewState(
-        latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
-        longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
-        zoom=14,
-        pitch=0,
-    )
+    map_df["icon_data"] = [icon_data] * len(map_df)
+
+    view_state = pdk.ViewState(latitude=48.818, longitude=2.47, zoom=14)
     
     st.pydeck_chart(pdk.Deck(
         map_style=None,
         initial_view_state=view_state,
         layers=[
-            pdk.Layer("ScatterplotLayer", map_df, get_position=["Lon", "Lat"], get_color="color", get_radius=60, pickable=True)
+            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size=40, get_angle="-Heading", pickable=True)
         ],
         tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
     ))
 
-    # 5. Légende et Analytics sous la carte
+    # 5. Légende et Analytics
     col_l1, col_l2 = st.columns(2)
     with col_l1:
         st.markdown("### 🎨 Légende")
@@ -113,7 +110,7 @@ else:
         st.sidebar.write(f"🆔 **Immat :** {selected_row['Immatriculation']}")
         
         col_a, col_b = st.sidebar.columns(2)
-        icao = selected_row['Identifiant Appareil (ICAO24)']
+        icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
             col_a.link_button("🛰️ Trace ADSB", f"https://globe.adsbexchange.com/?icao={icao}")
             col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
