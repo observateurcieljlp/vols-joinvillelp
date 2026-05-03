@@ -51,7 +51,7 @@ try:
         
         # 5. Nettoyage de l'affichage
         # On définit ici les colonnes qu'on veut vraiment montrer
-        colonnes_visibles = ['Heure', 'Indicatif', 'Altitude (m)', 'Trajet'] 
+        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)', 'Trajet'] 
         # Assurez-vous que ces noms correspondent exactement à votre Google Sheet
         
         # 6. Affichage du tableau avec configuration spéciale pour le lien
