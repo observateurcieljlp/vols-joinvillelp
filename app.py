@@ -243,15 +243,26 @@ try:
             # --- INSPECTEUR DE DONNÉES BRUTES ---
             st.sidebar.markdown("---")
             with st.sidebar.expander("🛠️ Données techniques (JSON)"):
-                al_raw = selected_row.get('Airlabs Info')
-                if al_raw and al_raw != "":
-                    st.write("**AirLabs:**")
-                    st.json(json.loads(al_raw) if isinstance(al_raw, str) else al_raw)
-                
-                os_raw = selected_row.get('OpenSky State Info')
-                if os_raw and os_raw != "":
-                    st.write("**OpenSky:**")
-                    st.json(json.loads(os_raw) if isinstance(os_raw, str) else os_raw)
+                def safe_json_display(label, data):
+                    if data is None or pd.isna(data) or str(data).strip() == "":
+                        return
+                    st.write(f"**{label}:**")
+                    try:
+                        # Si c'est déjà un dictionnaire/liste (objet Python)
+                        if isinstance(data, (dict, list)):
+                            st.json(data)
+                        else:
+                            # Tentative de parsing si c'est une chaîne
+                            st.json(json.loads(str(data)))
+                    except Exception:
+                        # Fallback en texte brut si le JSON est malformé
+                        st.code(str(data), language="text")
+
+                safe_json_display("AirLabs", selected_row.get('Airlabs Info'))
+                safe_json_display("OpenSky", selected_row.get('OpenSky State Info'))
+                safe_json_display("HexDB Route", selected_row.get('Hexdb Route Info'))
+                safe_json_display("HexDB Aircraft", selected_row.get('Hexdb Aircraft Info'))
+                safe_json_display("PlaneSpotters", selected_row.get('Planespotters Info'))
             # ------------------------------------
 
 except Exception as e:
