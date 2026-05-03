@@ -1,17 +1,16 @@
+import os
 import warnings
-warnings.filterwarnings("ignore")
 import logging
-# Silence total de Streamlit
-logging.getLogger("streamlit").setLevel(logging.ERROR)
-import os
 
-import os
-import time
-import math
-import json
-from datetime import datetime
+# Désactiver ABSOLUMENT TOUS les logs internes (Streamlit, GSheets, etc.)
+logging.disable(logging.CRITICAL)
+warnings.filterwarnings("ignore")
+os.environ["STREAMLIT_LOG_LEVEL"] = "error"
+
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+import time
+
 from FlightRadar24 import FlightRadar24API
 from utils_aircraft import refresh_aircraft_db, get_aircraft_info
 from requests.adapters import HTTPAdapter

@@ -5,17 +5,18 @@ Nettoyeur intelligent pour enrichir les données de vol a posteriori.
 Gère les retries pour éviter les bans et utilise une cascade de sources.
 """
 
+import os
 import warnings
-warnings.filterwarnings("ignore")
 import logging
-# Silence total de Streamlit
-logging.getLogger("streamlit").setLevel(logging.ERROR)
-import time
-import json
-import requests
-import pandas as pd
+
+# Désactiver ABSOLUMENT TOUS les logs internes (Streamlit, GSheets, etc.)
+logging.disable(logging.CRITICAL)
+warnings.filterwarnings("ignore")
+os.environ["STREAMLIT_LOG_LEVEL"] = "error"
+
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+import time
 from datetime import datetime, timedelta
 from curl_cffi import requests as cf_requests
 import pytz
