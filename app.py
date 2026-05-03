@@ -91,16 +91,19 @@ try:
             selected_idx = event.selection.rows[0]
             selected_row = df_jour.iloc[selected_idx]
 
-        # Logique de coloration pour la carte
-        map_df['color'] = [[0, 120, 255, 160] for _ in range(len(map_df))]
-        map_df['size'] = [60 for _ in range(len(map_df))]
-        
-        if selected_row is not None:
-            # On surligne l'avion sélectionné
-            # On utilise l'index ou l'ICAO24 pour matcher
-            target_icao = selected_row['Identifiant Appareil (ICAO24)']
-            map_df.loc[map_df['Identifiant Appareil (ICAO24)'] == target_icao, 'color'] = [[255, 0, 0, 230]]
-            map_df.loc[map_df['Identifiant Appareil (ICAO24)'] == target_icao, 'size'] = 120
+        # Logique de coloration et taille pour la carte (plus robuste via apply)
+        def set_map_color(row):
+            if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
+                return [255, 0, 0, 230] # Rouge si sélectionné
+            return [0, 120, 255, 160] # Bleu par défaut
+            
+        def set_map_size(row):
+            if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
+                return 120
+            return 60
+
+        map_df['color'] = map_df.apply(set_map_color, axis=1)
+        map_df['size'] = map_df.apply(set_map_size, axis=1)
 
         # Calques Pydeck
         # 1. Point d'impact
@@ -114,7 +117,7 @@ try:
         )
 
         # 2. Vecteur de direction (uniquement si le Heading est présent)
-        layers = [layer_points]
+        map_layers = [layer_points]
         if not map_df['Heading'].isna().all():
             layer_arrows = pdk.Layer(
                 "TextLayer",
@@ -126,7 +129,7 @@ try:
                 get_size=25,
                 alignment_baseline="'center'",
             )
-            layers.append(layer_arrows)
+            map_layers.append(layer_arrows)
 
         # État de la vue
         view_state = pdk.ViewState(
@@ -140,7 +143,7 @@ try:
         st.pydeck_chart(pdk.Deck(
             map_style='mapbox://styles/mapbox/light-v9',
             initial_view_state=view_state,
-            layers=[layer_points, layer_arrows],
+            layers=map_layers, # Utilisation de la liste dynamique
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
