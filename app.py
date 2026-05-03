@@ -51,9 +51,18 @@ try:
                 return f"https://fr.flightaware.com/live/flight/{callsign}"
             return None
 
+        def get_planespotters_link(row):
+            # L'immatriculation est le moyen le plus direct (ex: F-HTYH)
+            immat = str(row.get('Immatriculation', '')).strip()
+            
+            if immat and immat != "nan" and immat != "":
+                return f"https://www.planespotters.net/search?q={immat}"
+            return None
+
         # On crée la colonne de liens (sans l'afficher telle quelle)
         df_jour['Radar'] = df_jour.apply(get_adsb_link, axis=1)
         df_jour['Infos'] = df_jour.apply(get_flightaware_link, axis=1)
+        df_jour['Photos Avion'] = df_jour.apply(get_planespotters_link, axis=1)
         # --------------------------------------
 
         # 4. Affichage des Metrics (Valeur ajoutée)
@@ -61,7 +70,7 @@ try:
         
         # 5. Nettoyage de l'affichage
         # On définit ici les colonnes qu'on veut vraiment montrer
-        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)','Compagnie','Modèle Avion','De','A', 'Radar', 'Infos'] 
+        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)','Compagnie','Modèle Avion','De','A', 'Radar', 'Infos','Photos Avion'] 
        
         # Assurez-vous que ces noms correspondent exactement à votre Google Sheet
         
@@ -71,6 +80,7 @@ try:
             column_config={
                 "Radar": st.column_config.LinkColumn("Tracé Précis", display_text="🛰️ Trace ADSB"),
                 "Infos": st.column_config.LinkColumn("Historique", display_text="✈️ FlightAware"),
+                "Photo/Infos": st.column_config.LinkColumn("L'avion", display_text="📷 Photos")
                 "Altitude (m)": st.column_config.NumberColumn(format="%d m"),
             },
             use_container_width=True,
