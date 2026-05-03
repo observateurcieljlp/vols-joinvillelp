@@ -229,21 +229,32 @@ def run_scan():
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude, v_rate, lat, lon, heading = int(avion[13] or avion[7] or 0), avion[11] or 0, avion[6], avion[5], avion[10] or 0
-                pos_str, trend = f"({lat:.4f}, {lon:.4f})", ("⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable"))
+                
+                # Format enrichi : (Lat, Lon, Alt, Heading)
+                pos_entry = f"({lat:.4f}, {lon:.4f}, {altitude}, {int(heading)})"
+                trend = "⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable")
+                
                 match = df[(df["Identifiant Appareil (ICAO24)"] == icao24) & (df["Date"] == now_dt.strftime("%d/%m/%Y"))]
                 updated = False
                 for idx in match.index:
                     try:
                         if abs((datetime.strptime(df.at[idx, "Heure"], "%H:%M") - now_dt).total_seconds() / 60) < 15:
-                            if pos_str not in str(df.at[idx, "Positions"]):
-                                df.at[idx, "Positions"] = (str(df.at[idx, "Positions"]) + " | " + pos_str).strip(" | ")
-                                print(f"    ✅ Position ajoutée pour {callsign}")
-                            df.at[idx, "Altitude (m)"], df.at[idx, "Evolution Verticale"], df.at[idx, "Lat"], df.at[idx, "Lon"], df.at[idx, "Heading"], df.at[idx, "OpenSky State Info"] = altitude, trend, lat, lon, heading, json.dumps(avion, ensure_ascii=False)
+                            # Ajout de la position si elle est nouvelle
+                            current_pos = str(df.at[idx, "Positions"])
+                            if pos_entry not in current_pos:
+                                df.at[idx, "Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
+                                print(f"    ✅ Position enrichie ajoutée pour {callsign}")
+                            
+                            df.at[idx, "Altitude (m)"], df.at[idx, "Evolution Verticale"] = altitude, trend
+                            df.at[idx, "Lat"], df.at[idx, "Lon"], df.at[idx, "Heading"] = lat, lon, heading
+                            df.at[idx, "OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
                             updated = True; break
                     except: pass
+                
                 if not updated:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
                     make, model, reg, hx_raw, ps_raw = get_real_flight_info(icao24)
+                    # ... (reste du bloc new_entries identique mais avec pos_entry)
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
                     al_data = get_flight_airlabs(icao24)
                     if al_data:
