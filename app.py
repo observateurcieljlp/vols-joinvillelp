@@ -35,10 +35,17 @@ try:
     if df is None or df.empty:
         st.info("Le radar est actif, mais aucun vol n'a encore été enregistré.")
     else:
+        # --- GESTION DE LA MIGRATION DU SCHÉMA ---
+        # On s'assure que toutes les colonnes attendues existent pour éviter les plantages
+        colonnes_attendues = ['Lat', 'Lon', 'Heading', 'Altitude (m)', 'Identifiant Appareil (ICAO24)', 'Identifiant Vol (Callsign)', 'Immatriculation', 'Compagnie', 'Modèle Avion', 'Evolution Verticale', 'De', 'A', 'Heure', 'Date']
+        for col in colonnes_attendues:
+            if col not in df.columns:
+                df[col] = None # On initialise les colonnes manquantes
+
         # Prétraitement des colonnes numériques
         for col in ['Lat', 'Lon', 'Heading', 'Altitude (m)']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # ----------------------------------------
 
         # 2. Filtres en Sidebar
         st.sidebar.header("🗓️ Historique")
@@ -85,14 +92,15 @@ try:
             selected_row = df_jour.iloc[selected_idx]
 
         # Logique de coloration pour la carte
-        map_df['color'] = [[0, 120, 255, 160]] * len(map_df)
-        map_df['size'] = [60] * len(map_df)
+        map_df['color'] = [[0, 120, 255, 160] for _ in range(len(map_df))]
+        map_df['size'] = [60 for _ in range(len(map_df))]
         
         if selected_row is not None:
             # On surligne l'avion sélectionné
-            mask = map_df['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']
-            map_df.loc[mask, 'color'] = [[255, 0, 0, 230]]
-            map_df.loc[mask, 'size'] = 120
+            # On utilise l'index ou l'ICAO24 pour matcher
+            target_icao = selected_row['Identifiant Appareil (ICAO24)']
+            map_df.loc[map_df['Identifiant Appareil (ICAO24)'] == target_icao, 'color'] = [[255, 0, 0, 230]]
+            map_df.loc[map_df['Identifiant Appareil (ICAO24)'] == target_icao, 'size'] = 120
 
         # Calques Pydeck
         # 1. Point d'impact
@@ -105,17 +113,20 @@ try:
             pickable=True,
         )
 
-        # 2. Vecteur de direction
-        layer_arrows = pdk.Layer(
-            "TextLayer",
-            map_df,
-            get_position=["Lon", "Lat"],
-            get_text="arrow",
-            get_color="color",
-            get_angle="-Heading", # Inversion pour sens trigo
-            get_size=25,
-            alignment_baseline="'center'",
-        )
+        # 2. Vecteur de direction (uniquement si le Heading est présent)
+        layers = [layer_points]
+        if not map_df['Heading'].isna().all():
+            layer_arrows = pdk.Layer(
+                "TextLayer",
+                map_df.dropna(subset=['Heading']),
+                get_position=["Lon", "Lat"],
+                get_text="arrow",
+                get_color="color",
+                get_angle="-Heading",
+                get_size=25,
+                alignment_baseline="'center'",
+            )
+            layers.append(layer_arrows)
 
         # État de la vue
         view_state = pdk.ViewState(
