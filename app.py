@@ -35,15 +35,25 @@ try:
         df_jour = df[df['Date'] == jour_choisi].copy()
 
         # --- NOUVEAU : GÉNÉRATION DES LIENS ---
-        def get_adsb_link(icao24, date):
-            if not icao24 or pd.isna(icao24): return None
-            return f"https://globe.adsbexchange.com/?icao={str(icao24).strip()}&showHistory={date}"
+        def get_adsb_link(row):
+            icao = str(row.get('Identifiant Appareil (ICAO24)', '')).strip()
+            # On récupère la date au format YYYY-MM-DD
+            date_str = str(row.get('Date_Seule', ''))
+            if icao and icao != "nan" and icao != "":
+                # showHistory force l'affichage de la trace du jour choisi
+                return f"https://globe.adsbexchange.com/?icao={icao}&showHistory={date_str}"
+            return None
+
+        def get_flightaware_link(row):
+            callsign = str(row.get('Vol (Callsign)', '')).strip()
+            if callsign and callsign != "nan" and callsign != "":
+                # Lien vers l'historique du numéro de vol
+                return f"https://fr.flightaware.com/live/flight/{callsign}"
+            return None
 
         # On crée la colonne de liens (sans l'afficher telle quelle)
-        df_jour['Trajet'] = df_jour.apply(
-            lambda row: get_adsb_link(row['Identifiant Appareil (ICAO24)'], row['Date']), 
-            axis=1
-        )
+        df_jour['Radar'] = df_jour.apply(get_adsb_link, axis=1)
+        df_jour['Infos'] = df_jour.apply(get_flightaware_link, axis=1)
         # --------------------------------------
 
         # 4. Affichage des Metrics (Valeur ajoutée)
@@ -51,21 +61,21 @@ try:
         
         # 5. Nettoyage de l'affichage
         # On définit ici les colonnes qu'on veut vraiment montrer
-        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)', 'Trajet'] 
+        colonnes_visibles = ['Heure', 'Identifiant Vol (Callsign)', 'Altitude (m)','Compagnie','Modèle Avion','De','A', 'Trajet'] 
+       
         # Assurez-vous que ces noms correspondent exactement à votre Google Sheet
         
         # 6. Affichage du tableau avec configuration spéciale pour le lien
         st.dataframe(
-            df_jour[colonnes_visibles], 
+            df_jour[cols_finales],
             column_config={
-                "Trajet": st.column_config.LinkColumn(
-                    "Revoir le trajet", 
-                    display_text="🗺️ Voir sur la carte"
-                ),
-                "Altitude (m)": st.column_config.NumberColumn(format="%d m")
+                "Radar": st.column_config.LinkColumn("Tracé Précis", display_text="🛰️ Trace ADSB"),
+                "Infos": st.column_config.LinkColumn("Historique", display_text="✈️ FlightAware"),
+                "Altitude (m)": st.column_config.NumberColumn(format="%d m"),
+                "DateHeure": st.column_config.DatetimeColumn("Heure", format="HH:mm")
             },
             use_container_width=True,
-            hide_index=True # Pour enlever la colonne d'index 0, 1, 2...
+            hide_index=True
         )
 
 except Exception as e:
