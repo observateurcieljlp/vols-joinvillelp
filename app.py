@@ -131,11 +131,16 @@ try:
             )
             map_layers.append(layer_arrows)
 
-        # État de la vue
+        # État de la vue (centrage intelligent)
+        # On ne centre sur l'avion que si ses coordonnées sont valides (pas NaN)
+        has_valid_coords = (selected_row is not None and 
+                            not pd.isna(selected_row['Lat']) and 
+                            not pd.isna(selected_row['Lon']))
+
         view_state = pdk.ViewState(
-            latitude=selected_row['Lat'] if selected_row is not None else JOINVILLE_CENTER["lat"],
-            longitude=selected_row['Lon'] if selected_row is not None else JOINVILLE_CENTER["lon"],
-            zoom=14 if selected_row is not None else 13,
+            latitude=selected_row['Lat'] if has_valid_coords else JOINVILLE_CENTER["lat"],
+            longitude=selected_row['Lon'] if has_valid_coords else JOINVILLE_CENTER["lon"],
+            zoom=14 if has_valid_coords else 13,
             pitch=0,
         )
 
