@@ -209,7 +209,7 @@ def run_scan():
                         candidates.append(avion)
                         if 30 < next_sleep: next_sleep, decision_reason = 30, f"Suivi haute précision de {callsign}"
                     elif eta < HEARTBEAT_MAX:
-                        potential_sleep = max(30, int(eta) - MARGE_SECURITE) if eta > 60 else int(eta) + 1
+                        potential_sleep = max(30, int(eta) - MARGE_SECURITE) if eta > 60 else int(eta) + 5
                         print(f"  ➡️ [APPROCHE] {callsign} ({icao24}) {info_nav}. Réveil: {potential_sleep}s")
                         if potential_sleep < next_sleep: next_sleep, decision_reason = potential_sleep, f"Interception de {callsign}"
                 else: print(f"  ✈️ [HORS TRAJECTOIRE] {callsign} ({icao24}) {info_nav}")

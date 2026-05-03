@@ -31,12 +31,14 @@ os.environ["STREAMLIT_LOG_LEVEL"] = "error"
 
 WORKSHEET = "Vols_Joinville"
 
-# Schéma complet aligné sur infinite_collector.py + Nettoyage Retries
+# SCHÉMA GLOBAL UNIQUE (Synchro entre tous les scripts)
 COLS = [
-    "Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie", "Modèle Avion",
-    "Immatriculation", "Identifiant Appareil (ICAO24)", "Altitude (m)",
-    "Evolution Verticale", "De", "A", "Dep_H", "Arr_H", "Source",
-    "Planespotters", "Positions", "Airlabs Info", "Nettoyage Retries"
+    "Date", "Heure", "Identifiant Vol (Callsign)", "Compagnie", "Modèle Avion", 
+    "Immatriculation", "Identifiant Appareil (ICAO24)", "Altitude (m)", 
+    "Evolution Verticale", "Lat", "Lon", "Heading", "De", "A", "Dep_H", "Arr_H", 
+    "Source", "Planespotters", "Positions", "Nettoyage Retries",
+    "Airlabs Info", "OpenSky State Info", "Hexdb Route Info", 
+    "Hexdb Aircraft Info", "Planespotters Info", "Aircraft DB Info"
 ]
 
 MAX_RETRIES = 2
@@ -218,7 +220,7 @@ def main():
         conn = st.connection("gsheets", type=GSheetsConnection)
         
         # 1. Lecture et mise en forme
-        df = conn.read(worksheet=WORKSHEET, ttl=0)
+        df = conn.read(worksheet="Vols_Joinville", ttl=0)
         if df.empty:
             print("   Base vide.")
             return
@@ -226,6 +228,7 @@ def main():
         # S'assurer de la présence des colonnes
         for c in COLS:
             if c not in df.columns: df[c] = ""
+        df = df[COLS] # Force l'ordre et la présence pour éviter de dropper des colonnes
         
         # 2. Préparation du timestamp de matching (Paris -> UTC)
         def get_ts_paris(row):

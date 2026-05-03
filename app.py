@@ -15,8 +15,8 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("✈️ Radar des nuisances - Joinville-le-Pont")
-st.markdown("Surveillance citoyenne des survols à basse altitude.")
+st.title("✈️ Survols à basse altitude - Joinville-le-Pont")
+st.markdown("Surveillance citoyenne des survols à basse altitude (<3500m) au-dessus de Joinville-le-pont. Sources : opensky, hexdb, airlabs")
 
 # Connexion au Google Sheet
 try:
