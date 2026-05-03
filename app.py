@@ -184,6 +184,33 @@ try:
             pickable=True
         )
 
+        # Calque des points (Scatter)
+        layer_points = pdk.Layer(
+            "ScatterplotLayer",
+            map_df,
+            get_position=["Lon", "Lat"],
+            get_color="color",
+            get_radius="size",
+            pickable=True,
+        )
+
+        # Construction de la liste des calques
+        map_layers = [layer_paths, layer_points]
+
+        # Ajout du calque de direction seulement si le Heading est présent
+        if not map_df['Heading'].isna().all():
+            layer_arrows = pdk.Layer(
+                "TextLayer",
+                map_df.dropna(subset=['Heading']),
+                get_position=["Lon", "Lat"],
+                get_text="arrow",
+                get_color="color",
+                get_angle="-Heading",
+                get_size=25,
+                alignment_baseline="'center'",
+            )
+            map_layers.append(layer_arrows)
+
         # Rendu de la carte
         if map_df.empty:
             st.warning("⚠️ Aucune coordonnée précise (Lat/Lon) n'est encore disponible pour les vols de cette journée.")
@@ -191,7 +218,7 @@ try:
         st.pydeck_chart(pdk.Deck(
             map_style=None,
             initial_view_state=view_state,
-            layers=[layer_paths, layer_points, layer_arrows],
+            layers=map_layers, # Utilisation de la liste dynamique corrigée
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
@@ -213,9 +240,19 @@ try:
             if icao:
                 col_a.link_button("🛰️ Trace ADSB", f"https://globe.adsbexchange.com/?icao={icao}")
             
-            immat = selected_row['Immatriculation']
-            if immat:
-                col_b.link_button("📷 Photos", f"https://www.planespotters.net/search?q={immat}")
+            # --- INSPECTEUR DE DONNÉES BRUTES ---
+            st.sidebar.markdown("---")
+            with st.sidebar.expander("🛠️ Données techniques (JSON)"):
+                al_raw = selected_row.get('Airlabs Info')
+                if al_raw and al_raw != "":
+                    st.write("**AirLabs:**")
+                    st.json(json.loads(al_raw) if isinstance(al_raw, str) else al_raw)
+                
+                os_raw = selected_row.get('OpenSky State Info')
+                if os_raw and os_raw != "":
+                    st.write("**OpenSky:**")
+                    st.json(json.loads(os_raw) if isinstance(os_raw, str) else os_raw)
+            # ------------------------------------
 
 except Exception as e:
     st.error(f"Erreur d'affichage : {e}")
