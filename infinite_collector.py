@@ -142,7 +142,7 @@ def resolve_airport(code: str) -> str:
     return code
 
 def get_real_flight_info(icao24):
-    make, model, reg = get_aircraft_info(icao24)
+    make, model, reg, db_info_raw = get_aircraft_info(icao24)
     make, model, reg = clean(make), clean(model), clean(reg)
     hexdb_raw, ps_raw = "", ""
     if not make or not model or not reg:
@@ -156,7 +156,7 @@ def get_real_flight_info(icao24):
             ps_raw = p_raw
             if not make: make = clean(ps_make)
             if not model: model = clean(ps_model)
-    return make, model, reg, hexdb_raw, ps_raw
+    return make, model, reg, db_info_raw, hexdb_raw, ps_raw
 
 # =============================================================================
 # TOKEN & SCAN
