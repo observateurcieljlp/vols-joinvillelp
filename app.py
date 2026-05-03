@@ -45,7 +45,7 @@ try:
             return None
 
         def get_flightaware_link(row):
-            callsign = str(row.get('Vol (Callsign)', '')).strip()
+            callsign = str(row.get('Identifiant Vol (Callsign)', '')).strip()
             if callsign and callsign != "nan" and callsign != "":
                 # Lien vers l'historique du numéro de vol
                 return f"https://fr.flightaware.com/live/flight/{callsign}"
