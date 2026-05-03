@@ -6,3 +6,6 @@ FlightRadarAPI
 beautifulsoup4
 pyarrow
 urllib3
+pydeck
+pytz
+curl_cffi

@@ -144,11 +144,54 @@ try:
             pitch=0,
         )
 
+        # --- Préparation des trajectoires (Breadcrumbs) ---
+        def parse_positions(pos_str):
+            if not pos_str or pd.isna(pos_str): return []
+            paths = []
+            # Format: (lat, lon) | (lat, lon)
+            points = str(pos_str).split(" | ")
+            for p in points:
+                try:
+                    # Extraction des nombres via regex
+                    coords = re.findall(r"[-+]?\d*\.\d+|\d+", p)
+                    if len(coords) >= 2:
+                        # Pydeck attend [lon, lat]
+                        paths.append([float(coords[1]), float(coords[0])])
+                except: continue
+            return paths
+
+        # On crée un DataFrame pour les trajets
+        path_data = []
+        for _, row in df_jour.iterrows():
+            path = parse_positions(row.get('Positions', ''))
+            if len(path) > 1:
+                is_selected = (selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)'])
+                path_data.append({
+                    "path": path,
+                    "color": [255, 0, 0, 200] if is_selected else [0, 120, 255, 100],
+                    "width": 5 if is_selected else 2,
+                    "callsign": row['Identifiant Vol (Callsign)']
+                })
+
+        # Calque des trajets (Lignes)
+        layer_paths = pdk.Layer(
+            "PathLayer",
+            path_data,
+            get_path="path",
+            get_color="color",
+            get_width="width",
+            width_min_pixels=2,
+            pickable=True
+        )
+
         # Rendu de la carte
+        if map_df.empty:
+            st.warning("⚠️ Aucune coordonnée précise (Lat/Lon) n'est encore disponible pour les vols de cette journée.")
+        
         st.pydeck_chart(pdk.Deck(
-            map_style='mapbox://styles/mapbox/light-v9',
+            map_style=None,
             initial_view_state=view_state,
-            layers=map_layers, # Utilisation de la liste dynamique
+            layers=[layer_paths, layer_points, layer_arrows],
             tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
         ))
 
