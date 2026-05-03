@@ -164,11 +164,13 @@ try:
                         st.write(f"**{label}:**")
                         try: st.json(json.loads(str(data)) if isinstance(data, str) else data)
                         except: st.code(str(data))
-                safe_json("AirLabs", selected_row.get('Airlabs Info'))
-                safe_json("OpenSky", selected_row.get('OpenSky State Info'))
-                safe_json("HexDB Route", selected_row.get('Hexdb Route Info'))
-                safe_json("HexDB Aircraft", selected_row.get('Hexdb Aircraft Info'))
-                safe_json("PlaneSpotters", selected_row.get('Planespotters Info'))
+                safe_json_display("AirLabs", selected_row.get('Airlabs Info'))
+                safe_json_display("OpenSky", selected_row.get('OpenSky State Info'))
+                safe_json_display("HexDB Route", selected_row.get('Hexdb Route Info'))
+                safe_json_display("HexDB Aircraft", selected_row.get('Hexdb Aircraft Info'))
+                safe_json_display("PlaneSpotters", selected_row.get('Planespotters Info'))
+                safe_json_display("Base Locale (OpenSky)", selected_row.get('Aircraft DB Info'))
+
 
 except Exception as e:
     st.error(f"Erreur d'affichage : {e}")
