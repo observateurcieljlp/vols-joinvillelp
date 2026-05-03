@@ -80,7 +80,7 @@ try:
             column_config={
                 "Radar": st.column_config.LinkColumn("Tracé Précis", display_text="🛰️ Trace ADSB"),
                 "Infos": st.column_config.LinkColumn("Historique", display_text="✈️ FlightAware"),
-                "Photo/Infos": st.column_config.LinkColumn("L'avion", display_text="📷 Photos"),
+                "Photo/Infos": st.column_config.LinkColumn("Photos Avion", display_text="📷 Photos"),
                 "Altitude (m)": st.column_config.NumberColumn(format="%d m"),
             },
             use_container_width=True,
