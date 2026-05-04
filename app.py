@@ -31,7 +31,7 @@ if df is None or df.empty:
     st.info("Aucun vol enregistré.")
 else:
     # 1. Nettoyage et conversion robuste des dates
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
     df['Date_Str'] = df['Date'].dt.strftime('%d/%m/%Y')
     
     for col in ['Lat', 'Lon', 'Heading', 'Altitude (m)']:
