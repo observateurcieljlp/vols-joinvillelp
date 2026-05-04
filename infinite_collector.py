@@ -15,8 +15,8 @@ import warnings
 import logging
 
 # Silence total
-logging.disable(logging.CRITICAL)
-warnings.filterwarnings("ignore")
+# logging.disable(logging.CRITICAL)
+# warnings.filterwarnings("ignore")
 os.environ["STREAMLIT_LOG_LEVEL"] = "error"
 os.environ["STREAMLIT_SERVER_GATHER_USAGE_STATS"] = "false"
 
@@ -267,7 +267,32 @@ def run_scan():
                         hexdb_result = get_route_hexdb(callsign)
                         if hexdb_result: dep, arr, hexdb_route_raw, source = hexdb_result[0], hexdb_result[1], hexdb_result[2], "hexdb"
                     new_entries.append({
-                        "Date": now_dt.strftime("%d/%m/%Y"), "Heure": now_dt.strftime("%H:%M"), "Identifiant Vol (Callsign)": callsign, "Compagnie": make, "Modèle Avion": model, "Immatriculation": reg, "Identifiant Appareil (ICAO24)": icao24, "Altitude (m)": altitude, "Evolution Verticale": trend, "Lat": lat, "Lon": lon, "Heading": heading, "De": resolve_airport(dep), "A": resolve_airport(arr), "Dep_H": h_dep, "Arr_H": h_arr, "Source": source, "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")', "Positions": pos_str, "Airlabs Info": airlabs_raw, "OpenSky State Info": json.dumps(avion, ensure_ascii=False), "Hexdb Route Info": hexdb_route_raw, "Hexdb Aircraft Info": hx_raw, "Planespotters Info": ps_raw, "Aircraft DB Info": "", "Nettoyage Retries": 0
+                        "Date": now_dt.strftime("%d/%m/%Y"), 
+                        "Heure": now_dt.strftime("%H:%M"), 
+                        "Identifiant Vol (Callsign)": callsign, 
+                        "Compagnie": make, 
+                        "Modèle Avion": model, 
+                        "Immatriculation": reg, 
+                        "Identifiant Appareil (ICAO24)": icao24, 
+                        "Altitude (m)": altitude, 
+                        "Evolution Verticale": trend, 
+                        "Lat": lat, 
+                        "Lon": lon, 
+                        "Heading": heading, 
+                        "De": resolve_airport(dep), 
+                        "A": resolve_airport(arr), 
+                        "Dep_H": h_dep, 
+                        "Arr_H": h_arr, 
+                        "Source": source, 
+                        "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")', 
+                        "Positions": pos_entry,  # <--- CORRIGÉ ICI (au lieu de pos_str)
+                        "Airlabs Info": airlabs_raw, 
+                        "OpenSky State Info": json.dumps(avion, ensure_ascii=False), 
+                        "Hexdb Route Info": hexdb_route_raw, 
+                        "Hexdb Aircraft Info": hx_raw, 
+                        "Planespotters Info": ps_raw, 
+                        "Aircraft DB Info": "", 
+                        "Nettoyage Retries": 0
                     })
             if new_entries or updated:
                 df_final = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
