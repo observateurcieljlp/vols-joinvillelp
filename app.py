@@ -30,9 +30,7 @@ if df is None or df.empty:
     st.info("Aucun vol enregistré.")
 else:
     # 1. Nettoyage et conversion
-    df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
-    df['Date_Str'] = df['Date'].dt.strftime('%d/%m/%Y')
-    
+    df['Date'] = df['Date'].astype(str)
     for col in ['Lat', 'Lon', 'Heading', 'Altitude (m)']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if 'Identifiant Appareil (ICAO24)' in df.columns:
@@ -40,10 +38,10 @@ else:
 
     # 2. Sidebar et Filtres
     st.sidebar.header("🗓️ Filtres")
-    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date_Str'].unique(), reverse=True))
+    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date'].unique(), reverse=True))
     if st.sidebar.button("🔄 Actualiser"): st.rerun()
     
-    df_jour = df[df['Date_Str'] == jour_choisi].copy().reset_index(drop=True)
+    df_jour = df[df['Date'] == jour_choisi].copy().reset_index(drop=True)
     st.metric(f"Vols détectés le {jour_choisi}", len(df_jour))
 
     # 3. Tableau
@@ -61,8 +59,8 @@ else:
     # 4. Carte
     st.subheader("📍 Position sur la carte")
     map_df = df_jour.dropna(subset=['Lat', 'Lon']).copy()
-    
-    # Couleur par sélection et tendance
+
+    # Couleur
     def set_map_color(row):
         if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
             return [255, 0, 0, 255] # Rouge
@@ -72,17 +70,39 @@ else:
         return [0, 100, 255, 180]
 
     map_df['color'] = map_df.apply(set_map_color, axis=1)
-    map_df['icon'] = "✈" # Utilisation du symbole Unicode comme avant
 
-    # Carte orientée (Retour au TextLayer robuste)
-    view_state = pdk.ViewState(latitude=48.8230, longitude=2.4736, zoom=14)
+    # Icône Avion
+    icon_data = {
+        "url": "https://img.icons8.com/color/96/000000/airplane-mode-on.png",
+        "width": 128,
+        "height": 128,
+        "anchorY": 64,
+    }
+    map_df["icon_data"] = [icon_data] * len(map_df)
+
+    # Couleur et Taille basées sur la sélection
+    def set_map_size(row):
+        if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
+            return 80 # Plus gros si sélectionné
+        return 40
+
+    map_df['size'] = map_df.apply(set_map_size, axis=1)
+
+    # État de la vue
+    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
+    has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
+    view_state = pdk.ViewState(
+        latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
+        longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
+        zoom=14,
+        pitch=0,
+    )
     
     st.pydeck_chart(pdk.Deck(
         map_style=None,
         initial_view_state=view_state,
         layers=[
-            pdk.Layer("TextLayer", map_df, get_position=["Lon", "Lat"], get_text="icon", 
-                      get_color="color", get_angle="-Heading + 90", get_size=32, pickable=True)
+            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size="size", get_color="color", get_angle="90-Heading", pickable=True)
         ],
         tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
     ))
@@ -108,8 +128,11 @@ else:
         col_a, col_b = st.sidebar.columns(2)
         icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
-            date_formatted = pd.to_datetime(selected_row['Date']).strftime("%Y-%m-%d")
-            adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
+            try:
+                date_formatted = pd.to_datetime(selected_row['Date']).strftime("%Y-%m-%d")
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
+            except:
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
             
             col_a.link_button("🛰️ Trace ADSB", adsb_url)
             col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
