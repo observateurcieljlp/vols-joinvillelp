@@ -289,7 +289,7 @@ def run_scan():
                         "Airlabs Info": airlabs_raw, 
                         "OpenSky State Info": json.dumps(avion, ensure_ascii=False), 
                         "Hexdb Route Info": hexdb_route_raw, 
-                        "Hexdb Aircraft Info": hx_raw, 
+                        "Hexdb Aircraft Info": hexdb_raw, 
                         "Planespotters Info": ps_raw, 
                         "Aircraft DB Info": "", 
                         "Nettoyage Retries": 0
