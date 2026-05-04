@@ -3,7 +3,6 @@ import pandas as pd
 import pydeck as pdk
 import json
 from streamlit_gsheets import GSheetsConnection
-from datetime import datetime
 
 st.set_page_config(page_title="Radar Joinville", page_icon="✈️", layout="wide")
 
@@ -30,7 +29,7 @@ except Exception as e:
 if df is None or df.empty:
     st.info("Aucun vol enregistré.")
 else:
-    # 1. Nettoyage et conversion robuste des dates
+    # 1. Nettoyage et conversion
     df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
     df['Date_Str'] = df['Date'].dt.strftime('%d/%m/%Y')
     
@@ -62,8 +61,8 @@ else:
     # 4. Carte
     st.subheader("📍 Position sur la carte")
     map_df = df_jour.dropna(subset=['Lat', 'Lon']).copy()
-
-    # Couleur
+    
+    # Couleur par sélection et tendance
     def set_map_color(row):
         if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
             return [255, 0, 0, 255] # Rouge
@@ -73,22 +72,17 @@ else:
         return [0, 100, 255, 180]
 
     map_df['color'] = map_df.apply(set_map_color, axis=1)
+    map_df['icon'] = "✈" # Utilisation du symbole Unicode comme avant
 
-    # État de la vue
-    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
-    has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
-    view_state = pdk.ViewState(
-        latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
-        longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
-        zoom=14,
-        pitch=0,
-    )
+    # Carte orientée (Retour au TextLayer robuste)
+    view_state = pdk.ViewState(latitude=48.8230, longitude=2.4736, zoom=14)
     
     st.pydeck_chart(pdk.Deck(
         map_style=None,
         initial_view_state=view_state,
         layers=[
-            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size=40, get_angle="-Heading", pickable=True)
+            pdk.Layer("TextLayer", map_df, get_position=["Lon", "Lat"], get_text="icon", 
+                      get_color="color", get_angle="-Heading + 90", get_size=32, pickable=True)
         ],
         tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
     ))
