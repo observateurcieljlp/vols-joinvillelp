@@ -3,6 +3,7 @@ import pandas as pd
 import pydeck as pdk
 import json
 from streamlit_gsheets import GSheetsConnection
+from datetime import datetime
 
 st.set_page_config(page_title="Radar Joinville", page_icon="✈️", layout="wide")
 
@@ -29,8 +30,10 @@ except Exception as e:
 if df is None or df.empty:
     st.info("Aucun vol enregistré.")
 else:
-    # 1. Nettoyage et conversion
-    df['Date'] = df['Date'].astype(str)
+    # 1. Nettoyage et conversion robuste des dates
+    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    df['Date_Str'] = df['Date'].dt.strftime('%d/%m/%Y')
+    
     for col in ['Lat', 'Lon', 'Heading', 'Altitude (m)']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     if 'Identifiant Appareil (ICAO24)' in df.columns:
@@ -38,10 +41,10 @@ else:
 
     # 2. Sidebar et Filtres
     st.sidebar.header("🗓️ Filtres")
-    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date'].unique(), reverse=True))
+    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date_Str'].unique(), reverse=True))
     if st.sidebar.button("🔄 Actualiser"): st.rerun()
     
-    df_jour = df[df['Date'] == jour_choisi].copy().reset_index(drop=True)
+    df_jour = df[df['Date_Str'] == jour_choisi].copy().reset_index(drop=True)
     st.metric(f"Vols détectés le {jour_choisi}", len(df_jour))
 
     # 3. Tableau
@@ -71,36 +74,8 @@ else:
 
     map_df['color'] = map_df.apply(set_map_color, axis=1)
 
-    # Icône Avion
-    icon_data = {
-        "url": "https://img.icons8.com/color/96/000000/airplane-mode-on.png",
-        "width": 128,
-        "height": 128,
-        "anchorY": 64,
-    }
-    map_df["icon_data"] = [icon_data] * len(map_df)
-
-    # --- Zone Carte ---
-    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
-    
-    # Couleur et Taille basées sur la sélection
-    def set_map_color(row):
-        if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
-            return [255, 0, 0, 255] # Rouge
-        trend = str(row.get('Evolution Verticale', '')).lower()
-        if 'montée' in trend: return [46, 204, 113, 200]
-        if 'descente' in trend: return [230, 126, 34, 200]
-        return [0, 100, 255, 180]
-
-    def set_map_size(row):
-        if selected_row is not None and row['Identifiant Appareil (ICAO24)'] == selected_row['Identifiant Appareil (ICAO24)']:
-            return 80 # Plus gros si sélectionné
-        return 40
-
-    map_df['color'] = map_df.apply(set_map_color, axis=1)
-    map_df['size'] = map_df.apply(set_map_size, axis=1)
-
     # État de la vue
+    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
     has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
     view_state = pdk.ViewState(
         latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
@@ -113,7 +88,7 @@ else:
         map_style=None,
         initial_view_state=view_state,
         layers=[
-            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size="size", get_color="color", get_angle="90-Heading", pickable=True)
+            pdk.Layer("IconLayer", map_df, get_position=["Lon", "Lat"], get_icon="icon_data", get_size=40, get_angle="-Heading", pickable=True)
         ],
         tooltip={"text": "{Identifiant Vol (Callsign)}\nAlt: {Altitude (m)}m\nCap: {Heading}°"}
     ))
@@ -139,14 +114,8 @@ else:
         col_a, col_b = st.sidebar.columns(2)
         icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
-            # Conversion de la date DD/MM/YYYY vers YYYY-MM-DD pour l'URL
-            raw_date = str(selected_row['Date'])
-            try:
-                date_obj = datetime.strptime(raw_date, "%d/%m/%Y")
-                date_formatted = date_obj.strftime("%Y-%m-%d")
-                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
-            except:
-                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
+            date_formatted = pd.to_datetime(selected_row['Date']).strftime("%Y-%m-%d")
+            adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
             
             col_a.link_button("🛰️ Trace ADSB", adsb_url)
             col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
