@@ -129,13 +129,24 @@ else:
         icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
             try:
-                # Force le format ISO pour l'URL peu importe le formatage local
-                date_val = pd.to_datetime(selected_row['Date'])
+                # 1. Formatage de la date
+                date_val = pd.to_datetime(selected_row['Date'], format='%d/%m/%Y', errors='coerce')
                 date_formatted = date_val.strftime("%Y-%m-%d")
-                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
+
+                # 2. Extraction du timestamp depuis OpenSky State Info (4ème élément, index 3)
+                timestamp = ""
+                os_raw = selected_row.get('OpenSky State Info')
+                if os_raw and not pd.isna(os_raw):
+                    try:
+                        os_data = json.loads(str(os_raw))
+                        if isinstance(os_data, list) and len(os_data) > 3:
+                            timestamp = f"&timestamp={os_data[3]}"
+                    except: pass
+
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}{timestamp}"
             except:
                 adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
-            
+
             col_a.link_button("🛰️ Trace ADSB", adsb_url)
             col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
         
