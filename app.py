@@ -139,7 +139,16 @@ else:
         col_a, col_b = st.sidebar.columns(2)
         icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
-            col_a.link_button("🛰️ Trace ADSB", f"https://globe.adsbexchange.com/?icao={icao}")
+            # Conversion de la date DD/MM/YYYY vers YYYY-MM-DD pour l'URL
+            raw_date = str(selected_row['Date'])
+            try:
+                date_obj = datetime.strptime(raw_date, "%d/%m/%Y")
+                date_formatted = date_obj.strftime("%Y-%m-%d")
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
+            except:
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
+            
+            col_a.link_button("🛰️ Trace ADSB", adsb_url)
             col_b.link_button("📷 Photos", f"https://www.planespotters.net/hex/{icao.upper()}")
         
         with st.sidebar.expander("🛠️ Données techniques (JSON)"):
