@@ -108,13 +108,23 @@ else:
     ))
 
     # 5. Légende et Analytics sous la carte
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        st.markdown("### 🎨 Légende")
-        st.markdown("- 🟢 Montée | 🟠 Descente | 🔵 Stable | 🔴 Sélectionné")
-    with col_l2:
-        st.subheader("📊 Part des compagnies")
-        st.bar_chart(df_jour['Compagnie'].value_counts())
+    st.markdown("### 🎨 Légende")
+    st.markdown("- 🟢 Montée | 🟠 Descente | 🔵 Stable | 🔴 Sélectionné")
+
+    st.markdown("---")
+    col_stats1, col_stats2 = st.columns(2)
+    
+    with col_stats1:
+        st.subheader("🛫 Origines (Départs)")
+        df_dep = df_jour['De'].value_counts().reset_index()
+        df_dep.columns = ['Aéroport', 'Vols']
+        st.dataframe(df_dep, use_container_width=True, hide_index=True)
+
+    with col_stats2:
+        st.subheader("🛬 Destinations (Arrivées)")
+        df_arr = df_jour['A'].value_counts().reset_index()
+        df_arr.columns = ['Aéroport', 'Vols']
+        st.dataframe(df_arr, use_container_width=True, hide_index=True)
 
     # 6. Détails Sidebar
     if selected_row is not None:

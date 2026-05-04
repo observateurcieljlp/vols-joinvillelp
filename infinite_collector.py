@@ -203,16 +203,33 @@ def run_scan():
                 dist_km = math.sqrt(d_lat**2 + d_lon**2) * 111
                 eta = estimate_eta(lat, lon, heading, velocity)
                 info_nav = f"à {int(altitude)}m - Dist: {dist_km:.1f}km, Cap: {int(heading)}°, Vit: {int((velocity or 0)*3.6)}km/h, Gis: {int(bearing_to_j)}°"
-                if eta is not None:
-                    if eta == 0:
-                        print(f"  🎯 [ZONE] {callsign} ({icao24}) {info_nav} - SUR JOINVILLE !")
-                        candidates.append(avion)
-                        if 30 < next_sleep: next_sleep, decision_reason = 30, f"Suivi haute précision de {callsign}"
-                    elif eta < HEARTBEAT_MAX:
-                        potential_sleep = max(30, int(eta) - MARGE_SECURITE) if eta > 60 else int(eta) + 2
-                        print(f"  ➡️ [APPROCHE] {callsign} ({icao24}) {info_nav}. Réveil: {potential_sleep}s")
-                        if potential_sleep < next_sleep: next_sleep, decision_reason = potential_sleep, f"Interception de {callsign}"
-                else: print(f"  ✈️ [HORS TRAJECTOIRE] {callsign} ({icao24}) {info_nav}")
+                # --- LOGIQUE D'INTERCEPTION AMÉLIORÉE ---
+                # On définit si l'avion est "actuellement" au-dessus de Joinville (Zone de Capture)
+                is_inside = BBOX_JOINVILLE["lamin"] <= lat <= BBOX_JOINVILLE["lamax"] and \
+                            BBOX_JOINVILLE["lomin"] <= lon <= BBOX_JOINVILLE["lomax"]
+                
+                # Sécurité : On capture aussi s'il est à moins de 2.5km (évite les sauts de scan)
+                is_very_near = dist_km < 2.5 
+
+                if is_inside or is_very_near:
+                    status = "[ZONE]" if is_inside else "[PROXIMITÉ]"
+                    print(f"  🎯 {status} {callsign} ({icao24}) {info_nav} - CAPTURE !")
+                    candidates.append(avion)
+                    
+                    # Si on est en zone, on veut scanner souvent pour ne pas rater la sortie
+                    if 20 < next_sleep: 
+                        next_sleep, decision_reason = 20, f"Suivi intensif de {callsign} en zone"
+
+                elif eta is not None and eta < HEARTBEAT_MAX:
+                    # On se réveille 15 secondes AVANT l'impact pour être sûr d'être là à l'entrée en zone
+                    potential_sleep = max(15, int(eta) - 15)
+                    
+                    print(f"  ➡️ [APPROCHE] {callsign} ({icao24}) {info_nav}. Réveil anticipé: {potential_sleep}s")
+                    if potential_sleep < next_sleep: 
+                        next_sleep, decision_reason = potential_sleep, f"Interception anticipée de {callsign}"
+                
+                else:
+                    print(f"  ✈️ [HORS TRAJECTOIRE] {callsign} ({icao24}) {info_nav}")
             else: print(f"  ☁️ [TROP HAUT] {callsign} à {int(altitude)}m - Ignoré")
 
         if candidates:
@@ -234,27 +251,49 @@ def run_scan():
                 pos_entry = f"({lat:.4f}, {lon:.4f}, {altitude}, {int(heading)})"
                 trend = "⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable")
                 
-                match = df[(df["Identifiant Appareil (ICAO24)"] == icao24) & (df["Date"] == now_dt.strftime("%d/%m/%Y"))]
+                # --- LOGIQUE DE DÉDOUBLONNAGE AMÉLIORÉE ---
+                # On cherche si cet avion (ICAO24) a déjà été vu aujourd'hui
+                match = df[(df["Identifiant Appareil (ICAO24)"] == icao24) & 
+                           (df["Date"] == now_dt.strftime("%d/%m/%Y"))]
+                
                 updated = False
                 for idx in match.index:
                     try:
-                        if abs((datetime.strptime(df.at[idx, "Heure"], "%H:%M") - now_dt).total_seconds() / 60) < 15:
-                            # Ajout de la position si elle est nouvelle
+                        # On récupère l'heure de la ligne (en ignorant les secondes si elles existent)
+                        heure_sheet_str = str(df.at[idx, "Heure"]).split()[0] # Sécurité si format complet
+                        heure_sheet = datetime.strptime(heure_sheet_str[:5], "%H:%M").time()
+                        maintenant = now_dt.time()
+                        
+                        # Calcul de la différence en minutes
+                        diff_minutes = abs((datetime.combine(now_dt.date(), maintenant) - 
+                                          datetime.combine(now_dt.date(), heure_sheet)).total_seconds() / 60)
+
+                        # Si c'est le même avion dans une fenêtre de 10 minutes, c'est le même passage
+                        if diff_minutes < 10:
+                            # 1. Enrichissement des positions (historique des points)
                             current_pos = str(df.at[idx, "Positions"])
                             if pos_entry not in current_pos:
                                 df.at[idx, "Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
-                                print(f"    ✅ Position enrichie ajoutée pour {callsign}")
                             
-                            df.at[idx, "Altitude (m)"], df.at[idx, "Evolution Verticale"] = altitude, trend
-                            df.at[idx, "Lat"], df.at[idx, "Lon"], df.at[idx, "Heading"] = lat, lon, heading
+                            # 2. Mise à jour des données temps réel (on garde la plus basse altitude ?)
+                            old_alt = float(df.at[idx, "Altitude (m)"]) if df.at[idx, "Altitude (m)"] else 99999
+                            if altitude < old_alt:
+                                df.at[idx, "Altitude (m)"] = altitude # On enregistre le point le plus bas
+                            
+                            df.at[idx, "Lat"], df.at[idx, "Lon"] = lat, lon
+                            df.at[idx, "Evolution Verticale"] = trend
                             df.at[idx, "OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
-                            updated = True; break
-                    except: pass
+                            
+                            print(f"    ✅ Ligne existante mise à jour pour {callsign} (Point bas: {df.at[idx, 'Altitude (m)']}m)")
+                            updated = True
+                            break
+                    except Exception as e:
+                        print(f"    ⚠️ Erreur lors du check de doublon: {e}")
                 
                 if not updated:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
                     make, model, reg, db_info_raw, hexdb_raw, ps_raw = get_real_flight_info(icao24)
-                    # ... (reste du bloc new_entries identique mais avec pos_entry)
+                    
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
                     al_data = get_flight_airlabs(icao24)
                     if al_data:
@@ -294,12 +333,31 @@ def run_scan():
                         "Aircraft DB Info": "", 
                         "Nettoyage Retries": 0
                     })
+            # ==========================================
+            # NOUVEAU BLOC DE SAUVEGARDE (À REMPLACER)
+            # ==========================================
             if new_entries or updated:
-                df_final = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
+                print(f"📊 DEBUG : Fichier lu = {len(df)} lignes | Nouveaux vols à ajouter = {len(new_entries)}")
+                
+                # 1. Ajout sécurisé
+                if new_entries:
+                    df_final = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
+                else:
+                    df_final = df.copy()
+
+                # 2. Formatage
                 df_final = df_final.reindex(columns=COLS_GSHEET).fillna("")
-                df_final = df_final.drop_duplicates(subset=["Date", "Heure", "Identifiant Vol (Callsign)"], keep="last").tail(2000)
-                conn.update(worksheet="Vols_Joinville", data=df_final)
-                print(f"    💾 Google Sheet mis à jour.")
+                df_final = df_final.drop_duplicates(subset=["Date", "Identifiant Vol (Callsign)", "Identifiant Appareil (ICAO24)"], keep="last").tail(2000)
+
+                print(f"📊 DEBUG : Total prêt à l'envoi = {len(df_final)} lignes.")
+
+                # 3. Écriture avec capture d'erreur stricte
+                try:
+                    conn.update(worksheet="Vols_Joinville", data=df_final)
+                    print(f"    ✅ Google Sheet mis à jour avec SUCCÈS.")
+                except Exception as update_err:
+                    print(f"    ❌ ERREUR CACHÉE LORS DE L'ÉCRITURE : {update_err}")
+    
     except Exception as e: print(f"❌ ERREUR CRITIQUE : {e}")
     print(f"\n💤 DÉCISION : {decision_reason}\n⏰ SOMMEIL : {next_sleep} secondes")
     return next_sleep
