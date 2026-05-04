@@ -94,7 +94,7 @@ else:
     view_state = pdk.ViewState(
         latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
         longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
-        zoom=14,
+        zoom=13.5,
         pitch=0,
     )
     
@@ -159,7 +159,7 @@ else:
                             timestamp = f"&timestamp={os_data[3]+4}"
                     except: pass
                 lat, lon = selected_row['Lat'], selected_row['Lon']
-                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}{timestamp}&lat={lat}&lon={lon}&zoom=14.0"
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}{timestamp}&lat={lat}&lon={lon}&zoom=13.5"
             except:
                 adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
 
