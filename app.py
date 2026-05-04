@@ -120,7 +120,6 @@ else:
         df_dep.columns = ['Aéroport', 'Vols']
         if not df_dep.empty:
             st.bar_chart(df_dep.set_index('Aéroport'))
-            st.dataframe(df_dep, use_container_width=True, hide_index=True)
         else:
             st.info("Aucune donnée d'origine.")
 
@@ -130,7 +129,6 @@ else:
         df_arr.columns = ['Aéroport', 'Vols']
         if not df_arr.empty:
             st.bar_chart(df_arr.set_index('Aéroport'))
-            st.dataframe(df_arr, use_container_width=True, hide_index=True)
         else:
             st.info("Aucune donnée de destination.")
 
