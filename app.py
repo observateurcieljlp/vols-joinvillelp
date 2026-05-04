@@ -129,7 +129,9 @@ else:
         icao = str(selected_row['Identifiant Appareil (ICAO24)'])
         if icao and icao != 'nan':
             try:
-                date_formatted = pd.to_datetime(selected_row['Date']).strftime("%Y-%m-%d")
+                # Force le format ISO pour l'URL peu importe le formatage local
+                date_val = pd.to_datetime(selected_row['Date'])
+                date_formatted = date_val.strftime("%Y-%m-%d")
                 adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}"
             except:
                 adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
