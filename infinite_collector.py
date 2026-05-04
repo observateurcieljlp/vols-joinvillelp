@@ -27,7 +27,7 @@ os.environ["STREAMLIT_SERVER_GATHER_USAGE_STATS"] = "false"
 BBOX_WATCH = {"lamin": 48.40, "lamax": 49.20, "lomin": 2.00, "lomax": 3.00}
 BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
 
-ALTITUDE_MAX = 3500    
+ALTITUDE_MAX = 5000  
 HEARTBEAT_MAX = 180    
 MARGE_SECURITE = 30    
 
@@ -253,7 +253,7 @@ def run_scan():
                 
                 if not updated:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
-                    make, model, reg, hx_raw, ps_raw = get_real_flight_info(icao24)
+                    make, model, reg, db_info_raw, hexdb_raw, ps_raw = get_real_flight_info(icao24)
                     # ... (reste du bloc new_entries identique mais avec pos_entry)
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
                     al_data = get_flight_airlabs(icao24)

@@ -140,10 +140,10 @@ else:
                     try:
                         os_data = json.loads(str(os_raw))
                         if isinstance(os_data, list) and len(os_data) > 3:
-                            timestamp = f"&timestamp={os_data[3]}"
+                            timestamp = f"&timestamp={os_data[3]+4}"
                     except: pass
-
-                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}{timestamp}"
+                lat, lon = selected_row['Lat'], selected_row['Lon']
+                adsb_url = f"https://globe.adsbexchange.com/?icao={icao}&showTrace={date_formatted}{timestamp}&lat={lat}&lon={lon}&zoom=14.0"
             except:
                 adsb_url = f"https://globe.adsbexchange.com/?icao={icao}"
 
