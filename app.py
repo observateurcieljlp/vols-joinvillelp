@@ -118,13 +118,21 @@ else:
         st.subheader("🛫 Origines (Départs)")
         df_dep = df_jour['De'].value_counts().reset_index()
         df_dep.columns = ['Aéroport', 'Vols']
-        st.dataframe(df_dep, use_container_width=True, hide_index=True)
+        if not df_dep.empty:
+            st.bar_chart(df_dep.set_index('Aéroport'))
+            st.dataframe(df_dep, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune donnée d'origine.")
 
     with col_stats2:
         st.subheader("🛬 Destinations (Arrivées)")
         df_arr = df_jour['A'].value_counts().reset_index()
         df_arr.columns = ['Aéroport', 'Vols']
-        st.dataframe(df_arr, use_container_width=True, hide_index=True)
+        if not df_arr.empty:
+            st.bar_chart(df_arr.set_index('Aéroport'))
+            st.dataframe(df_arr, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucune donnée de destination.")
 
     # 6. Détails Sidebar
     if selected_row is not None:
