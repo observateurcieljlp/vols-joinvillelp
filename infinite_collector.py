@@ -363,43 +363,48 @@ def run_scan():
                     raw_rows.append(new_row)
                     updated = True
 
-            if updated:
-                # 2. Dédoublonnage final et limitation (Gardant les 2000 derniers)
-                # On trie par Date/Heure pour être sûr (format FR DD/MM/YYYY HH:MM est délicat à trier en string)
-                def sort_key(r):
-                    try: return datetime.strptime(f"{r['Date']} {r['Heure']}", "%d/%m/%Y %H:%M")
-                    except: return datetime.min
-                
-                raw_rows.sort(key=sort_key)
-                raw_rows = raw_rows[-2000:]
-
-                # 3. Préparation et Écriture
+            # ==========================================
+            # ÉCRITURE CHIRURGICALE (Batch Update & Append)
+            # ==========================================
+            if updated or new_entries:
                 try:
-                    clean_data = [COLS_GSHEET]
-                    for row in raw_rows:
-                        row_vals = []
+                    def format_row_for_gsheets(row_dict):
+                        formatted = []
                         for c in COLS_GSHEET:
-                            val = row.get(c, "")
-                            # Sécurité JSON/GSheets
+                            val = row_dict.get(c, "")
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
-                                row_vals.append("")
+                                formatted.append("")
                             elif c in ["Lat", "Lon"] and isinstance(val, (float, int)):
-                                # METHODE RADICALE : On force le TEXTE avec une apostrophe invisible
-                                # et on utilise le POINT pour que ce soit standard
-                                row_vals.append(f"'{float(val):.4f}")
+                                # METHODE RADICALE : TEXTE pur + POINT pour éviter la corruption
+                                formatted.append(f"'{float(val):.4f}")
                             elif isinstance(val, float):
-                                # Pour les autres nombres (Altitude, etc.), la virgule suffit
-                                row_vals.append(f"{val}".replace(".", ","))
+                                # Autres nombres : Virgule pour la localisation FR
+                                formatted.append(f"{val}".replace(".", ","))
                             else:
-                                row_vals.append(val)
-                        clean_data.append(row_vals)
+                                formatted.append(val)
+                        return formatted
 
-                    ws.clear()
-                    # USER_ENTERED nécessaire pour que l'apostrophe soit interprétée comme "Format Texte"
-                    ws.update(values=clean_data, range_name='A1', value_input_option='USER_ENTERED')
-                    print(f"    ✅ Google Sheet mis à jour avec SUCCÈS via gspread.")
+                    # A. Mise à jour des lignes existantes modifiées (Batch)
+                    if updated:
+                        updates = []
+                        # On parcourt raw_rows pour trouver les lignes modifiées
+                        # (Dans cette version, on renvoie tout le bloc si modifié, 
+                        #  mais on pourrait être encore plus fin)
+                        for i, row in enumerate(raw_rows):
+                            updates.append({'range': f'A{i+2}', 'values': [format_row_for_gsheets(row)]})
+                        
+                        if updates:
+                            ws.batch_update(updates, value_input_option='USER_ENTERED')
+                            print(f"    ✅ {len(updates)} lignes existantes synchronisées.")
+
+                    # B. Ajout des nouveaux vols (Append)
+                    if new_entries:
+                        rows_to_append = [format_row_for_gsheets(e) for entry in new_entries]
+                        ws.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+                        print(f"    🆕 {len(new_entries)} nouveaux vols ajoutés.")
+
                 except Exception as update_err:
-                    print(f"    ❌ ERREUR LORS DE L'ÉCRITURE : {update_err}")
+                    print(f"    ❌ ERREUR LORS DE LA MISE À JOUR : {update_err}")
     
     except Exception as e:
         print(f"❌ ERREUR CRITIQUE : {e}")
