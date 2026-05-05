@@ -191,9 +191,15 @@ def main():
             vides = ["", "inconnu", "nan", "none", "?", "--:--"]
             
             is_unreliable = source in ["", "hexdb", "OpenSky (Live)"]
-            is_missing_airport = de in vides or a in vides
+            is_missing_airport = val_de in vides or val_a in vides
             is_missing_times = dep_h in vides or arr_h in vides
             
+            # ELIGIBILITÉ : On nettoie si :
+            # 1. La source est peu fiable (on veut monter en gamme vers FlightAware)
+            # 2. OU il manque l'aéroport (De/A)
+            # 3. OU il manque les heures (Dep_H/Arr_H) même si la source est déjà FlightAware
+            should_clean = is_unreliable or is_missing_airport or is_missing_times
+
             try: retries = int(get_val("Nettoyage Retries") or 0)
             except: retries = 0
 
@@ -207,7 +213,7 @@ def main():
                             continue 
                 except: pass
 
-            if (is_unreliable or is_missing_airport or is_missing_times) and retries < MAX_RETRIES:
+            if should_clean and retries < MAX_RETRIES:
                 # 3. Traitement
                 print(f"    -> Ligne {row_num}: {callsign} ({date_str})")
                 dep, arr, h_dep, h_arr, f_info = get_flightaware_web_data(callsign, ts)
