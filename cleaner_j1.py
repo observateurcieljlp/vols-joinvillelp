@@ -141,8 +141,7 @@ def main():
         ws = get_worksheet()
         if not ws: return
 
-        # 1. Lecture de TOUTES les lignes (pour avoir les numéros de ligne exacts)
-        # On utilise get_all_values pour avoir la structure brute sans conversion GSheets
+        # 1. Lecture de TOUTES les lignes
         data = ws.get_all_values()
         if len(data) <= 1: 
             print("   Base vide.")
@@ -151,7 +150,6 @@ def main():
         header = data[0]
         rows = data[1:]
         
-        # Mapping des colonnes pour être sûr
         col_map = {name: i for i, name in enumerate(header)}
         for c in COLS:
             if c not in col_map: 
@@ -163,13 +161,11 @@ def main():
         now_ts = datetime.now().timestamp()
         
         success_count = 0
-        updates = [] # Liste des objets {range, values} pour gspread
+        updates = [] 
 
         for i, row_vals in enumerate(rows):
-            # Le numéro de ligne réel dans GSheets est i + 2 (1-based + header)
             row_num = i + 2
             
-            # Extraction des données avec sécurité (si la ligne est plus courte que le header)
             def get_val(name):
                 idx = col_map.get(name)
                 return row_vals[idx] if idx < len(row_vals) else ""
@@ -179,27 +175,39 @@ def main():
             heure_str = get_val("Heure")
             icao = get_val("Identifiant Appareil (ICAO24)")
             
-            # Check date/heure
             try:
                 dt = datetime.strptime(f"{date_str} {heure_str}", "%d/%m/%Y %H:%M")
                 ts = tz_paris.localize(dt).timestamp()
             except: continue
 
             # Éligibilité
-            if ts > (now_ts - 600): continue # Trop récent
+            if ts > (now_ts - 600): continue 
             
             source = get_val("Source")
             de = get_val("De").lower()
             a = get_val("A").lower()
+            dep_h = get_val("Dep_H")
+            arr_h = get_val("Arr_H")
             vides = ["", "inconnu", "nan", "none", "?", "--:--"]
             
             is_unreliable = source in ["", "hexdb", "OpenSky (Live)"]
-            is_missing = de in vides or a in vides
+            is_missing_airport = de in vides or a in vides
+            is_missing_times = dep_h in vides or arr_h in vides
             
             try: retries = int(get_val("Nettoyage Retries") or 0)
             except: retries = 0
 
-            if (is_unreliable or is_missing) and retries < MAX_RETRIES:
+            # Condition spécifique "Départ Récent"
+            if arr_h in vides and dep_h not in vides:
+                try:
+                    dt_dep = datetime.strptime(f"{date_str} {dep_h}", "%d/%m/%Y %H:%M")
+                    ts_dep = tz_paris.localize(dt_dep).timestamp()
+                    if (ts - ts_dep) < 2400: # Capturé < 40 min après départ
+                        if now_ts < (ts + 21600): # Attendre 6h après capture
+                            continue 
+                except: pass
+
+            if (is_unreliable or is_missing_airport or is_missing_times) and retries < MAX_RETRIES:
                 # 3. Traitement
                 print(f"    -> Ligne {row_num}: {callsign} ({date_str})")
                 dep, arr, h_dep, h_arr, f_info = get_flightaware_web_data(callsign, ts)
@@ -208,10 +216,7 @@ def main():
                     dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts, user, pwd)
 
                 if dep and dep != "Inconnu":
-                    # SUCCÈS : On prépare la mise à jour de la ligne entière
-                    # (On récupère la ligne, on la modifie et on l'ajoute aux batchs)
                     new_row = list(row_vals)
-                    # S'assurer que new_row a la bonne taille
                     while len(new_row) < len(COLS): new_row.append("")
                     
                     def set_val(name, val):
@@ -232,7 +237,6 @@ def main():
                         if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                             new_row[idx] = ""
                         elif col_name in ["Lat", "Lon"] and isinstance(val, (float, int)):
-                            # On force le TEXTE pur pour éviter la corruption GSheets
                             new_row[idx] = f"'{float(val):.4f}"
                         elif isinstance(val, float):
                             new_row[idx] = str(val).replace(".", ",")
@@ -241,18 +245,20 @@ def main():
                     success_count += 1
                     print(f"        ✅ OK : {dep} -> {arr}")
                 else:
-                    # ÉCHEC : On incrémente juste le compteur de retries
-                    # On fait une mise à jour ciblée juste sur la cellule retries pour économiser
-                    col_letter = chr(65 + col_map["Nettoyage Retries"]) # Simple mapping A, B, C...
+                    col_letter = ""
+                    # Trouver la lettre de colonne pour Nettoyage Retries
+                    idx_retries = col_map["Nettoyage Retries"]
+                    if idx_retries < 26: col_letter = chr(65 + idx_retries)
+                    else: col_letter = "T" # Securité hardcoded pour la colonne T si décalage
+                    
                     updates.append({'range': f'{col_letter}{row_num}', 'values': [[retries + 1]]})
                     print(f"        ❌ Échec (Retry {retries + 1})")
                 
-                time.sleep(2) # Politesse
+                time.sleep(2) 
 
         # 4. Envoi des mises à jour PAR LOTS
         if updates:
             print(f"\n💾 Envoi de {len(updates)} mises à jour chirurgicales...")
-            # gspread batch_update est très puissant
             ws.batch_update(updates, value_input_option='USER_ENTERED')
             print(f"✅ Terminé ({success_count} enrichissements réussis).")
         else:
