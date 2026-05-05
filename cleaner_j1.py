@@ -23,12 +23,24 @@ def load_config():
     if os.path.exists(secrets_path):
         try:
             with open(secrets_path, "r") as f:
+                current_section = None
                 for line in f:
                     line = line.strip()
+                    if not line or line.startswith("#"): continue
+                    if line.startswith("[") and line.endswith("]"):
+                        current_section = line[1:-1].strip()
+                        continue
                     if "=" in line:
                         key, val = line.split("=", 1)
-                        config[key.strip()] = val.strip().strip('"').strip("'")
-        except: pass
+                        key = key.strip()
+                        val = val.strip().strip('"').strip("'")
+                        # Gestion des clés simples et des clés dans connections.gsheets
+                        if not current_section:
+                            config[key] = val
+                        elif current_section == "connections.gsheets":
+                            config[key] = val
+        except Exception as e:
+            print(f"⚠️ Erreur lecture secrets.toml : {e}")
 
     if os.path.exists("config.json"):
         try:
@@ -56,6 +68,7 @@ def get_worksheet():
     try:
         sheet_url = CONFIG.get("spreadsheet")
         sh = client.open_by_url(sheet_url) if sheet_url else client.open(CONFIG.get("GOOGLE_SHEET_NAME", "Radar_Joinville"))
+        print(f"📂 Liste des onglets : {[w.title for w in sh.worksheets()]}")
         return sh.worksheet("Vols_Joinville")
     except: return None
 
@@ -95,13 +108,20 @@ def get_flightaware_web_data(callsign, target_ts):
                 dp = o.get("icao") or o.get("iata") or o.get("friendlyName")
                 ar = d.get("icao") or d.get("iata") or d.get("friendlyName")
                 ts = f.get("takeoffTimes", {}).get("actual") or f.get("takeoffTimes", {}).get("estimated")
-                if ts: flights.append({"dp": dp, "ar": ar, "ts": ts, "ac": f.get("aircraftTypeFriendly", "")})
+                landing_ts = f.get("landingTimes", {}).get("actual") or f.get("landingTimes", {}).get("estimated")
+                if ts: flights.append({"dp": dp, "ar": ar, "ts": ts, "landing_ts": landing_ts, "ac": f.get("aircraftTypeFriendly", "")})
         
         if not flights: return None, None, None, None, None
         best = min(flights, key=lambda x: abs(x["ts"] - target_ts))
         if abs(best["ts"] - target_ts) > 7200: return None, None, None, None, None
-        h_dep = datetime.fromtimestamp(best["ts"], tz=pytz.timezone("Europe/Paris")).strftime("%H:%M")
-        return best["dp"], best["ar"], h_dep, "--:--", {"aircraft": best["ac"]}
+        
+        tz = pytz.timezone("Europe/Paris")
+        h_dep = datetime.fromtimestamp(best["ts"], tz=tz).strftime("%H:%M")
+        h_arr = "--:--"
+        if best.get("landing_ts"):
+            h_arr = datetime.fromtimestamp(best["landing_ts"], tz=tz).strftime("%H:%M")
+            
+        return best["dp"], best["ar"], h_dep, h_arr, {"aircraft": best["ac"]}
     except: return None, None, None, None, None
 
 def get_opensky_flight_history(icao24, timestamp, user, pwd):
@@ -110,7 +130,11 @@ def get_opensky_flight_history(icao24, timestamp, user, pwd):
         r = requests.get(url, auth=(user, pwd), timeout=20)
         if r.status_code == 200 and r.json():
             best = min(r.json(), key=lambda f: abs((f.get('firstSeen') or 0) - timestamp))
-            return best.get('estDepartureAirport'), best.get('estArrivalAirport'), datetime.fromtimestamp(best['firstSeen']).strftime('%H:%M'), "--:--"
+            h_dep = datetime.fromtimestamp(best['firstSeen']).strftime('%H:%M')
+            h_arr = "--:--"
+            if best.get('lastSeen'):
+                h_arr = datetime.fromtimestamp(best['lastSeen']).strftime('%H:%M')
+            return best.get('estDepartureAirport'), best.get('estArrivalAirport'), h_dep, h_arr
     except: pass
     return None, None, None, None
 
@@ -139,8 +163,12 @@ def main():
     try:
         user, pwd = CONFIG.get("OPENSKY_USER", "").lower(), CONFIG.get("OPENSKY_PWD", "")
         ws = get_worksheet()
-        if not ws: return
+        if not ws: 
+            print("❌ Impossible d'accéder au Worksheet.")
+            return
 
+        print(f"📊 Worksheet : {ws.spreadsheet.title} > {ws.title}")
+        
         # 1. Lecture de TOUTES les lignes
         data = ws.get_all_values()
         if len(data) <= 1: 
@@ -168,7 +196,7 @@ def main():
             
             def get_val(name):
                 idx = col_map.get(name)
-                return row_vals[idx] if idx < len(row_vals) else ""
+                return row_vals[idx] if idx is not None and idx < len(row_vals) else ""
 
             callsign = get_val("Identifiant Vol (Callsign)")
             date_str = get_val("Date")
@@ -184,34 +212,20 @@ def main():
             if ts > (now_ts - 600): continue 
             
             source = get_val("Source")
-            val_de = get_val("De").lower()
-            val_a = get_val("A").lower()
+            val_de = get_val("De")
+            val_a = get_val("A")
             dep_h = get_val("Dep_H")
             arr_h = get_val("Arr_H")
             vides = ["", "inconnu", "nan", "none", "?", "--:--"]
             
             is_unreliable = source in ["", "hexdb", "OpenSky (Live)"]
-            is_missing_airport = val_de in vides or val_a in vides
+            is_missing_airport = val_de.lower() in vides or val_a.lower() in vides
             is_missing_times = dep_h in vides or arr_h in vides
             
-            # ELIGIBILITÉ : On nettoie si :
-            # 1. La source est peu fiable (on veut monter en gamme vers FlightAware)
-            # 2. OU il manque l'aéroport (De/A)
-            # 3. OU il manque les heures (Dep_H/Arr_H) même si la source est déjà FlightAware
             should_clean = is_unreliable or is_missing_airport or is_missing_times
 
             try: retries = int(get_val("Nettoyage Retries") or 0)
             except: retries = 0
-
-            # Condition spécifique "Départ Récent"
-            if arr_h in vides and dep_h not in vides:
-                try:
-                    dt_dep = datetime.strptime(f"{date_str} {dep_h}", "%d/%m/%Y %H:%M")
-                    ts_dep = tz_paris.localize(dt_dep).timestamp()
-                    if (ts - ts_dep) < 2400: # Capturé < 40 min après départ
-                        if now_ts < (ts + 21600): # Attendre 6h après capture
-                            continue 
-                except: pass
 
             if should_clean and retries < MAX_RETRIES:
                 # 3. Traitement
@@ -222,8 +236,10 @@ def main():
                     dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts, user, pwd)
 
                 if dep and dep != "Inconnu":
-                    new_row = list(row_vals)
-                    while len(new_row) < len(COLS): new_row.append("")
+                    # Création d'une copie propre calée sur le header actuel
+                    new_row = [""] * len(header)
+                    for idx, val in enumerate(row_vals):
+                        if idx < len(new_row): new_row[idx] = val
                     
                     def set_val(name, val):
                         if name in col_map: new_row[col_map[name]] = val
@@ -239,44 +255,48 @@ def main():
                     
                     # Adaptation Locale & Sécurité Formatage
                     for idx, val in enumerate(new_row):
-                        col_name = header[idx]
-                        if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
-                            new_row[idx] = ""
-                        elif col_name in ["Lat", "Lon"] and isinstance(val, (float, int)):
-                            new_row[idx] = f"'{float(val):.4f}"
-                        elif isinstance(val, float):
-                            new_row[idx] = str(val).replace(".", ",")
+                        if idx < len(header):
+                            col_name = header[idx]
+                            if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
+                                new_row[idx] = ""
+                            elif col_name in ["Lat", "Lon"] and isinstance(val, (float, int)):
+                                new_row[idx] = f"'{float(val):.4f}"
+                            elif isinstance(val, float):
+                                new_row[idx] = str(val).replace(".", ",")
 
                     updates.append({'range': f'A{row_num}', 'values': [new_row]})
                     success_count += 1
                     print(f"        ✅ OK : {dep} -> {arr}")
                 else:
                     col_letter = ""
-                    # Trouver la lettre de colonne pour Nettoyage Retries
                     idx_retries = col_map["Nettoyage Retries"]
                     if idx_retries < 26: col_letter = chr(65 + idx_retries)
-                    else: col_letter = "T" # Securité hardcoded pour la colonne T si décalage
+                    else: col_letter = "T" 
                     
                     updates.append({'range': f'{col_letter}{row_num}', 'values': [[retries + 1]]})
                     print(f"        ❌ Échec (Retry {retries + 1})")
                 
-                time.sleep(2) 
+                time.sleep(1) 
 
-        # 4. Envoi des mises à jour PAR LOTS
+        # 4. Envoi des mises à jour
         if updates:
             print(f"\n💾 Préparation de {len(updates)} mises à jour...")
-            # Debug : Afficher le contenu du premier update pour vérification
-            first = updates[0]
-            print(f"    [DEBUG] Premier update sur {first['range']}: {first['values'][0][:5]}...")
-            
+            if len(updates) > 0:
+                first = updates[0]
+                print(f"    [DEBUG] Premier update sur {first['range']}: {first['values'][0][:5]}...")
+
             try:
-                # On utilise batch_update avec value_input_option='USER_ENTERED'
-                # C'est la méthode recommandée pour modifier des lignes éparpillées
-                ws.batch_update(updates, value_input_option='USER_ENTERED')
+                res = ws.batch_update(updates, value_input_option='USER_ENTERED')
                 print(f"✅ Google Sheets a confirmé la réception des {len(updates)} lignes.")
                 print(f"🚀 {success_count} vols ont été enrichis avec succès.")
             except Exception as api_err:
                 print(f"❌ ERREUR API GOOGLE : {api_err}")
+                print("Tentative de mise à jour ligne par ligne (fallback)...")
+                for up in updates:
+                    try:
+                        ws.update(values=up['values'], range_name=up['range'], value_input_option='USER_ENTERED')
+                    except: pass
+                print("✅ Fin du fallback ligne par ligne.")
         else:
             print("\n✅ Rien à mettre à jour.")
 
