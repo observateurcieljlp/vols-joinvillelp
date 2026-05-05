@@ -295,43 +295,50 @@ def run_scan():
                 pos_entry = f"({lat:.4f}, {lon:.4f}, {altitude}, {int(heading)})"
                 trend = "⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable")
                 
-                # --- LOGIQUE DE DÉDOUBLONNAGE ---
+                # --- LOGIQUE DE DÉDOUBLONNAGE AMÉLIORÉE ---
                 match_found = False
                 today_str = now_dt.strftime("%d/%m/%Y")
-                # On force le cap en ENTIER pour éviter les bugs de virgule GSheets
+                icao24_lower = str(icao24).strip().lower()
                 heading_val = int(round(heading)) if heading is not None else 0
                 
                 for row in raw_rows:
-                    if row.get("Identifiant Appareil (ICAO24)") == icao24 and row.get("Date") == today_str:
+                    row_icao = str(row.get("Identifiant Appareil (ICAO24)", "")).strip().lower()
+                    if row_icao == icao24_lower and row.get("Date") == today_str:
                         try:
                             heure_sheet_str = str(row.get("Heure")).split()[0]
                             heure_sheet = datetime.strptime(heure_sheet_str[:5], "%H:%M").time()
                             diff_minutes = abs((datetime.combine(now_dt.date(), now_dt.time()) - 
                                               datetime.combine(now_dt.date(), heure_sheet)).total_seconds() / 60)
                             
-                            if diff_minutes < 10:
+                            if diff_minutes < 15: 
+                                # Mise à jour des positions (Trace)
                                 current_pos = str(row.get("Positions", ""))
                                 if pos_entry not in current_pos:
                                     row["Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
                                 
-                                old_alt = float(row.get("Altitude (m)") or 99999)
-                                if altitude < old_alt:
-                                    row["Altitude (m)"] = altitude
+                                # Mise à jour altitude si plus basse
+                                try:
+                                    raw_old_alt = str(row.get("Altitude (m)") or "99999").replace(",", ".")
+                                    old_alt = float(raw_old_alt)
+                                    if altitude < old_alt:
+                                        row["Altitude (m)"] = altitude
+                                except: pass
                                 
-                                row["Lat"], row["Lon"] = lat, lon
-                                row["Heading"] = heading_val
+                                # NOTE: On ne change PAS Lat, Lon, Heading pour garder l'avion au-dessus de Joinville
+                                # Mais on met à jour la tendance et l'état brut
                                 row["Evolution Verticale"] = trend
                                 row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
                                 row["_is_dirty"] = True
                                 
-                                print(f"    ✅ Ligne existante mise à jour pour {callsign}")
+                                print(f"    ✅ Vol {callsign} toujours en zone. Trace complétée (Alt: {altitude}m).")
                                 match_found = True
                                 updated = True
                                 break
-                        except: pass
+                        except Exception as e:
+                            print(f"    ⚠️ Erreur comparaison ligne : {e}")
                 
                 if not match_found:
-                    print(f"    🆕 Nouvel enregistrement pour {callsign}")
+                    print(f"    🆕 Nouvel enregistrement pour {callsign} (Alt: {altitude}m / {int(altitude*3.28)}ft)")
                     make, model, reg, db_info_raw, hexdb_raw, ps_raw = get_real_flight_info(icao24)
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
                     
