@@ -298,6 +298,8 @@ def run_scan():
                 # --- LOGIQUE DE DÉDOUBLONNAGE ---
                 match_found = False
                 today_str = now_dt.strftime("%d/%m/%Y")
+                # On force le cap en ENTIER pour éviter les bugs de virgule GSheets
+                heading_val = int(round(heading)) if heading is not None else 0
                 
                 for row in raw_rows:
                     if row.get("Identifiant Appareil (ICAO24)") == icao24 and row.get("Date") == today_str:
@@ -317,6 +319,7 @@ def run_scan():
                                     row["Altitude (m)"] = altitude
                                 
                                 row["Lat"], row["Lon"] = lat, lon
+                                row["Heading"] = heading_val
                                 row["Evolution Verticale"] = trend
                                 row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
                                 row["_is_dirty"] = True
@@ -350,7 +353,7 @@ def run_scan():
                         "Identifiant Vol (Callsign)": callsign, "Compagnie": make, 
                         "Modèle Avion": model, "Immatriculation": reg, 
                         "Identifiant Appareil (ICAO24)": icao24, "Altitude (m)": altitude, 
-                        "Evolution Verticale": trend, "Lat": lat, "Lon": lon, "Heading": heading, 
+                        "Evolution Verticale": trend, "Lat": lat, "Lon": lon, "Heading": heading_val, 
                         "De": resolve_airport(dep), "A": resolve_airport(arr), 
                         "Dep_H": h_dep, "Arr_H": h_arr, "Source": source, 
                         "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")', 
@@ -374,6 +377,7 @@ def run_scan():
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 formatted.append("")
                             elif isinstance(val, float):
+                                # Alignement sur le Cleaner : Virgule + Precision 4 pour Lat/Lon
                                 if c in ["Lat", "Lon"]:
                                     formatted.append(f"{val:.4f}".replace(".", ","))
                                 else:
