@@ -1,5 +1,4 @@
 requests
-pandas
 gspread
 google-auth
 pytz

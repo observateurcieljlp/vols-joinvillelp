@@ -1,44 +1,111 @@
 import requests
-import pandas as pd
+import sqlite3
 import os
 import time
+import csv
+import json
+import io
 
-DB_FILE = "aircraft_db.parquet"
+DB_FILE = "aircraft_db.sqlite"
 
 def refresh_aircraft_db():
-    """Télécharge et convertit la base si absente ou âgée de > 30 jours."""
+    """Télécharge et convertit la base OpenSky en SQLite si absente ou âgée de > 30 jours."""
     if os.path.exists(DB_FILE) and (time.time() - os.path.getmtime(DB_FILE) < 30 * 86400):
         return
 
-    print("Mise à jour de la base OpenSky locale (conversion Parquet)...")
+    print("Mise à jour de la base OpenSky locale (SQLite)...")
     url = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
+    
     try:
-        # Téléchargement et conversion directe en mémoire pour éviter le fichier temporaire
-        df = pd.read_csv(url, low_memory=False)
-        df.to_parquet(DB_FILE, compression='snappy')
-        print("Base mise à jour avec succès.")
+        # On utilise une connexion SQLite
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Création de la table
+        cursor.execute("DROP TABLE IF EXISTS aircraft")
+        cursor.execute("""
+            CREATE TABLE aircraft (
+                icao24 TEXT PRIMARY KEY,
+                registration TEXT,
+                manufacturericao TEXT,
+                manufacturername TEXT,
+                model TEXT,
+                typecode TEXT,
+                serialnumber TEXT,
+                linenumber TEXT,
+                icaoaircrafttype TEXT,
+                operator TEXT,
+                operatorcallsign TEXT,
+                operatoricao TEXT,
+                operatoriata TEXT,
+                owner TEXT,
+                testreg TEXT,
+                registered TEXT,
+                reguntil TEXT,
+                status TEXT,
+                built TEXT,
+                firstflightdate TEXT,
+                seatconfigexp TEXT,
+                seatconfigtxt TEXT,
+                notes TEXT
+            )
+        """)
+        
+        # Téléchargement en streaming pour économiser la RAM
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            # On décode le flux CSV ligne par ligne
+            csv_reader = csv.reader(io.TextIOWrapper(response.raw, encoding='utf-8'))
+            header = next(csv_reader) # Sauter le header
+            
+            # Préparation de l'insertion massive (bulk insert)
+            buffer = []
+            count = 0
+            for row in csv_reader:
+                if len(row) >= 23:
+                    # On ne garde que les 23 premières colonnes pour correspondre à notre schéma
+                    buffer.append(tuple(row[:23]))
+                    count += 1
+                
+                if len(buffer) >= 1000:
+                    cursor.executemany("INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", buffer)
+                    buffer = []
+                    if count % 50000 == 0:
+                        print(f"  ... {count} avions importés")
+            
+            if buffer:
+                cursor.executemany("INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", buffer)
+            
+            # Indexation pour des recherches instantanées
+            cursor.execute("CREATE INDEX idx_icao ON aircraft(icao24)")
+            conn.commit()
+            print(f"Base SQLite mise à jour avec succès ({count} avions).")
+        
+        conn.close()
     except Exception as e:
-        print(f"Erreur mise à jour base : {e}")
-
-import json
+        print(f"Erreur mise à jour base SQLite : {e}")
 
 def get_aircraft_info(icao24):
-    """Récupère infos avion et le JSON brut depuis la base Parquet locale."""
+    """Récupère infos avion et le JSON brut depuis la base SQLite."""
     try:
         if not os.path.exists(DB_FILE):
             return "Inconnu", "Inconnu", "Inconnu", ""
             
-        # On lit la base localement
-        df = pd.read_parquet(DB_FILE)
-        row = df[df['icao24'] == icao24.lower()]
-        if not row.empty:
-            r = row.iloc[0]
-            # On convertit toute la ligne en dictionnaire pour le raw log
-            raw_data = r.to_dict()
-            # On gère les types non-JSON (comme les NaN)
-            raw_json = json.dumps({k: (v if not pd.isna(v) else None) for k, v in raw_data.items()}, ensure_ascii=False)
+        conn = sqlite3.connect(DB_FILE)
+        conn.row_factory = sqlite3.Row # Pour accéder aux colonnes par nom
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM aircraft WHERE icao24 = ?", (icao24.lower(),))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            # Conversion en dict pour le JSON brut
+            raw_data = dict(row)
+            raw_json = json.dumps(raw_data, ensure_ascii=False)
             
-            return r.get('operator', "Inconnu"), r.get('model', "Inconnu"), r.get('registration', "Inconnu"), raw_json
+            return row['operator'] or "Inconnu", row['model'] or "Inconnu", row['registration'] or "Inconnu", raw_json
     except Exception as e:
-        print(f"Erreur lecture Parquet : {e}")
+        print(f"Erreur lecture SQLite : {e}")
+    
     return "Inconnu", "Inconnu", "Inconnu", ""

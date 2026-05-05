@@ -2,7 +2,7 @@
 __pycache__/
 venv/
 .env
-aircraft_db.parquet
+*.parquet
 test_airlabs.py
 aircraftDatabase.csv
 *.log

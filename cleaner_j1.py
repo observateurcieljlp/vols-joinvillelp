@@ -13,7 +13,6 @@ import re
 import json
 import time
 import requests
-import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
@@ -223,7 +222,7 @@ def get_flightaware_web_data(
 # ---------------------------------------------------------------------------
 
 def get_opensky_flight_history(icao24, timestamp, user, pwd):
-    begin, end = timestamp - 14400, timestamp + 14400
+    begin, end = int(timestamp - 14400), int(timestamp + 14400)
     url = f"https://opensky-network.org/api/flights/aircraft?icao24={icao24}&begin={begin}&end={end}"
     try:
         response = requests.get(url, auth=(user, pwd), timeout=20)
@@ -273,148 +272,105 @@ def main():
         ws = get_worksheet()
         if not ws: return
         
-        # 1. Lecture et mise en forme
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
-        if df.empty:
+        # 1. Lecture native via gspread
+        raw_rows = ws.get_all_records()
+        if not raw_rows:
             print("   Base vide.")
             return
 
         # S'assurer de la présence des colonnes
-        for c in COLS:
-            if c not in df.columns: df[c] = ""
-        df = df[COLS] # Force l'ordre et la présence pour éviter de dropper des colonnes
+        for row in raw_rows:
+            for c in COLS:
+                if c not in row: row[c] = ""
         
-        # 2. Préparation du timestamp de matching (Paris -> UTC)
-        def get_ts_paris(row):
-            try:
-                dt = datetime.strptime(f"{row['Date']} {row['Heure']}", "%d/%m/%Y %H:%M")
-                return pytz.timezone("Europe/Paris").localize(dt).timestamp()
-            except: return None
+        # 2. Logique d'enrichissement
+        success_count = 0
+        modified_count = 0
+        tz_paris = pytz.timezone("Europe/Paris")
 
-        df["ts_matching"] = df.apply(get_ts_paris, axis=1)
-
-        # 3. Logique d'éligibilité avec Compteur de Retries
-        def check_eligibility(row):
-            callsign = str(row.get("Identifiant Vol (Callsign)") or "Unknown")
+        for row in raw_rows:
+            callsign = str(row.get("Identifiant Vol (Callsign)") or "Unknown").strip()
+            icao     = str(row.get("Identifiant Appareil (ICAO24)") or "").strip()
+            date_str = str(row.get("Date"))
+            heure_str = str(row.get("Heure"))
             
-            # A. Trop de retries ?
+            # A. Calcul du timestamp
+            ts_matching = None
             try:
-                retries_raw = row.get("Nettoyage Retries")
-                retries = int(retries_raw) if (retries_raw and str(retries_raw).strip() != "") else 0
-            except: 
-                retries = 0
-            
-            if retries >= MAX_RETRIES:
-                return False
+                dt = datetime.strptime(f"{date_str} {heure_str}", "%d/%m/%Y %H:%M")
+                ts_matching = tz_paris.localize(dt).timestamp()
+            except: continue
 
-            # B. Est-ce que la donnée actuelle est complète et fiable ?
+            # B. Check éligibilité
+            try:
+                retries = int(row.get("Nettoyage Retries") or 0)
+            except: retries = 0
+            
+            if retries >= MAX_RETRIES: continue
+
             vides = ["", "inconnu", "nan", "none", "none -> none", "?", "inconnue", "--:--"]
-            
             val_de = str(row.get("De") or "").strip().lower()
             val_a = str(row.get("A") or "").strip().lower()
             val_dep_h = str(row.get("Dep_H") or "").strip().lower()
             val_arr_h = str(row.get("Arr_H") or "").strip().lower()
             
             missing_data = (val_de in vides or val_a in vides or val_dep_h in vides or val_arr_h in vides)
-            
             source = str(row.get("Source") or "").strip()
             SOURCES_NON_FIABLES = ["hexdb", "OpenSky (Live)", ""]
             unreliable_source = source in SOURCES_NON_FIABLES
 
-            if not (missing_data or unreliable_source):
-                return False
-
-            # C. Délai minimal (10 min)
-            ts = row.get("ts_matching")
-            if not ts: 
-                return False
+            if not (missing_data or unreliable_source): continue
             
-            is_ready = ts < (datetime.now().timestamp() - 600)
-            
-            if is_ready:
-                reason = "Data missing" if missing_data else f"Unreliable source ({source})"
-                print(f"    [Eligible] {callsign} ({reason}, Retries: {retries})")
-            
-            return is_ready
+            # Délai minimal (10 min)
+            if ts_matching > (datetime.now().timestamp() - 600): continue
 
-        df["is_eligible"] = df.apply(check_eligibility, axis=1)
-        df_todo = df[df["is_eligible"] == True].copy()
+            # C. Enrichissement
+            print(f"\n    -> {callsign} | {date_str} {heure_str}")
+            dep, arr, h_dep, h_arr, f_info = get_flightaware_web_data(callsign, ts_matching)
 
-        if df_todo.empty:
-            print("    ✅ Aucun vol à traiter.")
-            return
-
-        print(f"    🔍 {len(df_todo)} vol(s) à enrichir.")
-
-        # 4. Boucle d'enrichissement
-        success_count = 0
-        df_modified = False
-
-        for idx, row in df_todo.iterrows():
-            callsign = str(row["Identifiant Vol (Callsign)"]).strip()
-            icao     = str(row["Identifiant Appareil (ICAO24)"]).strip()
-            ts       = row["ts_matching"]
-
-            print(f"\n    -> {callsign} | {row['Date']} {row['Heure']}")
-
-            # Tentative FA
-            dep, arr, h_dep, h_arr, f_info = get_flightaware_web_data(callsign, ts)
-
-            # Fallback OpenSky
             if (not dep or dep == "Inconnu") and icao and icao != "nan" and user:
                 print("        [Fallback] Tentative OpenSky...")
-                dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts, user, pwd)
+                dep, arr, h_dep, h_arr = get_opensky_flight_history(icao, ts_matching, user, pwd)
 
             if dep and dep != "Inconnu":
-                # SUCCÈS
-                df.at[idx, "De"]     = resolve_airport(dep)
-                df.at[idx, "A"]      = resolve_airport(arr) if arr else "Inconnu"
-                df.at[idx, "Dep_H"]  = h_dep if h_dep else ""
-                df.at[idx, "Arr_H"]  = h_arr if h_arr else ""
-                df.at[idx, "Source"] = "FlightAware (Web)" if f_info else "OpenSky (History)"
+                row["De"]     = resolve_airport(dep)
+                row["A"]      = resolve_airport(arr) if arr else "Inconnu"
+                row["Dep_H"]  = h_dep if h_dep else ""
+                row["Arr_H"]  = h_arr if h_arr else ""
+                row["Source"] = "FlightAware (Web)" if f_info else "OpenSky (History)"
                 if f_info and f_info.get("aircraft"):
-                    if not df.at[idx, "Modèle Avion"] or df.at[idx, "Modèle Avion"] in ("", "nan"):
-                        df.at[idx, "Modèle Avion"] = f_info["aircraft"]
+                    if not row.get("Modèle Avion") or row.get("Modèle Avion") in ("", "nan"):
+                        row["Modèle Avion"] = f_info["aircraft"]
                 
                 print(f"        ✅ OK : {dep} -> {arr}")
                 success_count += 1
             else:
-                # ÉCHEC : On incrémente le compteur de retries
-                try:
-                    current_retries = int(df.at[idx, "Nettoyage Retries"] or 0)
-                except: current_retries = 0
-                df.at[idx, "Nettoyage Retries"] = current_retries + 1
-                print(f"        ❌ Échec (Tentative {current_retries + 1}/{MAX_RETRIES})")
+                row["Nettoyage Retries"] = retries + 1
+                print(f"        ❌ Échec (Tentative {retries + 1}/{MAX_RETRIES})")
             
-            df_modified = True
-            time.sleep(2) # Politesse
+            modified_count += 1
+            time.sleep(2)
 
-        # 5. Sauvegarde
-        if df_modified:
-            cols_to_drop = [c for c in ["ts_matching", "is_eligible"] if c in df.columns]
-            df_final = df.drop(columns=cols_to_drop)
-            
-            # Sécurité anti-NaN : gspread/JSON ne supporte pas NaN ou Infinity
-            # On remplace par des chaînes vides
-            df_final = df_final.replace([float('inf'), float('-inf')], None)
-            df_final = df_final.fillna("")
-            
+        # 3. Sauvegarde
+        if modified_count > 0:
             try:
-                # Préparation des données avant de vider la feuille
-                data_to_send = [df_final.columns.values.tolist()] + df_final.values.tolist()
-                
-                # Conversion explicite en string pour tout ce qui n'est pas JSON compliant
-                # (Certains types numériques pandas peuvent poser problème)
-                clean_data = []
-                for row_list in data_to_send:
-                    clean_row = []
-                    for val in row_list:
-                        if pd.isna(val) or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
-                            clean_row.append("")
+                # Tri final par Date/Heure
+                def sort_key(r):
+                    try: return datetime.strptime(f"{r['Date']} {r['Heure']}", "%d/%m/%Y %H:%M")
+                    except: return datetime.min
+                raw_rows.sort(key=sort_key)
+
+                clean_data = [COLS]
+                for row in raw_rows:
+                    row_vals = []
+                    for c in COLS:
+                        val = row.get(c, "")
+                        # Sécurité JSON/GSheets
+                        if val is None or (isinstance(val, (float, int)) and (val != val or val == float('inf') or val == float('-inf'))):
+                            row_vals.append("")
                         else:
-                            clean_row.append(val)
-                    clean_data.append(clean_row)
+                            row_vals.append(val)
+                    clean_data.append(row_vals)
 
                 ws.clear()
                 ws.update(values=clean_data, range_name='A1')

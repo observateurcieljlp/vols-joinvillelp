@@ -1,5 +1,4 @@
 import requests
-import pandas as pd
 import os
 import time
 import math
@@ -95,7 +94,6 @@ COLS_GSHEET = [
 # =============================================================================
 # INITIALISATION & API
 # =============================================================================
-pd.set_option('future.no_silent_downcasting', True)
 refresh_aircraft_db()
 
 session = requests.Session()
@@ -127,7 +125,7 @@ def get_flight_airlabs(icao24: str) -> dict | None:
         if not api_key: return None
         url = f"https://airlabs.co/api/v9/flights?hex={icao24.lower()}&api_key={api_key}"
         print(f"    [API AirLabs]   requête -> {url}")
-        r = requests.get(url, timeout=10)
+        r = session.get(url, timeout=10) # Utilisation de la session avec retry
         if r.status_code == 200:
             data = r.json()
             if "response" in data and isinstance(data["response"], list) and len(data["response"]) > 0:
@@ -141,7 +139,7 @@ def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
     if not cs or cs == "INCONNU": return None
     url = f"https://hexdb.io/api/v1/route/icao/{cs}"
     try:
-        r = requests.get(url, timeout=5)
+        r = session.get(url, timeout=5)
         if r.status_code == 200:
             data = r.json()
             raw_json = json.dumps(data, ensure_ascii=False)
@@ -154,7 +152,7 @@ def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
 def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str, str]:
     url = f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}"
     try:
-        r = requests.get(url, timeout=5)
+        r = session.get(url, timeout=5)
         if r.status_code == 200:
             d = r.json()
             return d.get("RegisteredOwners", ""), d.get("Type", ""), d.get("Registration", ""), json.dumps(d, ensure_ascii=False)
@@ -164,7 +162,7 @@ def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str, str]:
 def get_aircraft_planespotters(icao24: str) -> tuple[str, str, str]:
     url = f"https://api.planespotters.net/pub/photos/hex/{icao24.lower()}"
     try:
-        r = requests.get(url, timeout=5)
+        r = session.get(url, timeout=5)
         if r.status_code == 200:
             data = r.json()
             if data.get("photos"):
@@ -180,7 +178,7 @@ def resolve_airport(code: str) -> str:
     if code in _airport_cache: return _airport_cache[code]
     try:
         endpoint = f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}"
-        r = requests.get(endpoint, timeout=5)
+        r = session.get(endpoint, timeout=5)
         if r.status_code == 200:
             nom = r.json().get("airport", "").strip()
             for s in (" Airport", " International Airport", " Intl", " International"): nom = nom.replace(s, "")
@@ -254,30 +252,21 @@ def run_scan():
                 eta = estimate_eta(lat, lon, heading, velocity)
                 info_nav = f"à {int(altitude)}m - Dist: {dist_km:.1f}km, Cap: {int(heading)}°, Vit: {int((velocity or 0)*3.6)}km/h, Gis: {int(bearing_to_j)}°"
                 # --- LOGIQUE D'INTERCEPTION AMÉLIORÉE ---
-                # On définit si l'avion est "actuellement" au-dessus de Joinville (Zone de Capture)
                 is_inside = BBOX_JOINVILLE["lamin"] <= lat <= BBOX_JOINVILLE["lamax"] and \
                             BBOX_JOINVILLE["lomin"] <= lon <= BBOX_JOINVILLE["lomax"]
-                
-                # Sécurité : On capture aussi s'il est à moins de 2.5km (évite les sauts de scan)
                 is_very_near = dist_km < 2.5 
 
                 if is_inside or is_very_near:
                     status = "[ZONE]" if is_inside else "[PROXIMITÉ]"
                     print(f"  🎯 {status} {callsign} ({icao24}) {info_nav} - CAPTURE !")
                     candidates.append(avion)
-                    
-                    # Si on est en zone, on veut scanner souvent pour ne pas rater la sortie
                     if 20 < next_sleep: 
                         next_sleep, decision_reason = 20, f"Suivi intensif de {callsign} en zone"
-
                 elif eta is not None and eta < HEARTBEAT_MAX:
-                    # On se réveille 15 secondes AVANT l'impact pour être sûr d'être là à l'entrée en zone
                     potential_sleep = max(15, int(eta) - 15)
-                    
                     print(f"  ➡️ [APPROCHE] {callsign} ({icao24}) {info_nav}. Réveil anticipé: {potential_sleep}s")
                     if potential_sleep < next_sleep: 
                         next_sleep, decision_reason = potential_sleep, f"Interception anticipée de {callsign}"
-                
                 else:
                     print(f"  ✈️ [HORS TRAJECTOIRE] {callsign} ({icao24}) {info_nav}")
             else: print(f"  ☁️ [TROP HAUT] {callsign} à {int(altitude)}m - Ignoré")
@@ -285,70 +274,65 @@ def run_scan():
         if candidates:
             ws = get_worksheet()
             if not ws: return next_sleep
+            
+            # 1. Lecture native via gspread
             try:
-                data = ws.get_all_records()
-                df = pd.DataFrame(data)
-                df = df.rename(columns={"Avion":"Identifiant Vol (Callsign)","icao24":"Identifiant Appareil (ICAO24)","Altitude":"Altitude (m)"})
-                for c in COLS_GSHEET:
-                    if c not in df.columns: df[c] = ""
-                df = df[COLS_GSHEET]
-            except: df = pd.DataFrame(columns=COLS_GSHEET)
+                raw_rows = ws.get_all_records()
+                # On s'assure que toutes les colonnes existent pour chaque dictionnaire
+                for row in raw_rows:
+                    # Renommage legacy pour compatibilité interne si nécessaire
+                    if "Avion" in row: row["Identifiant Vol (Callsign)"] = row.pop("Avion")
+                    if "icao24" in row: row["Identifiant Appareil (ICAO24)"] = row.pop("icao24")
+                    if "Altitude" in row: row["Altitude (m)"] = row.pop("Altitude")
+                    for c in COLS_GSHEET:
+                        if c not in row: row[c] = ""
+            except:
+                raw_rows = []
 
-            new_entries = []
             updated = False
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude, v_rate, lat, lon, heading = int(avion[13] or avion[7] or 0), avion[11] or 0, avion[6], avion[5], avion[10] or 0
-                
-                # Format enrichi : (Lat, Lon, Alt, Heading)
                 pos_entry = f"({lat:.4f}, {lon:.4f}, {altitude}, {int(heading)})"
                 trend = "⬆️ Montée" if v_rate > 0.5 else ("⬇️ Descente" if v_rate < -0.5 else "➡️ Stable")
                 
-                # --- LOGIQUE DE DÉDOUBLONNAGE AMÉLIORÉE ---
-                # On cherche si cet avion (ICAO24) a déjà été vu aujourd'hui
-                match = df[(df["Identifiant Appareil (ICAO24)"] == icao24) & 
-                           (df["Date"] == now_dt.strftime("%d/%m/%Y"))]
+                # --- LOGIQUE DE DÉDOUBLONNAGE ---
+                match_found = False
+                today_str = now_dt.strftime("%d/%m/%Y")
                 
-                flight_updated = False
-                for idx in match.index:
-                    try:
-                        # On récupère l'heure de la ligne (en ignorant les secondes si elles existent)
-                        heure_sheet_str = str(df.at[idx, "Heure"]).split()[0] # Sécurité si format complet
-                        heure_sheet = datetime.strptime(heure_sheet_str[:5], "%H:%M").time()
-                        maintenant = now_dt.time()
-                        
-                        # Calcul de la différence en minutes
-                        diff_minutes = abs((datetime.combine(now_dt.date(), maintenant) - 
-                                          datetime.combine(now_dt.date(), heure_sheet)).total_seconds() / 60)
-
-                        # Si c'est le même avion dans une fenêtre de 10 minutes, c'est le même passage
-                        if diff_minutes < 10:
-                            # 1. Enrichissement des positions (historique des points)
-                            current_pos = str(df.at[idx, "Positions"])
-                            if pos_entry not in current_pos:
-                                df.at[idx, "Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
+                for row in raw_rows:
+                    if row.get("Identifiant Appareil (ICAO24)") == icao24 and row.get("Date") == today_str:
+                        try:
+                            heure_sheet_str = str(row.get("Heure")).split()[0]
+                            heure_sheet = datetime.strptime(heure_sheet_str[:5], "%H:%M").time()
+                            diff_minutes = abs((datetime.combine(now_dt.date(), now_dt.time()) - 
+                                              datetime.combine(now_dt.date(), heure_sheet)).total_seconds() / 60)
                             
-                            # 2. Mise à jour des données temps réel (on garde la plus basse altitude ?)
-                            old_alt = float(df.at[idx, "Altitude (m)"]) if df.at[idx, "Altitude (m)"] else 99999
-                            if altitude < old_alt:
-                                df.at[idx, "Altitude (m)"] = altitude # On enregistre le point le plus bas
-                            
-                            df.at[idx, "Lat"], df.at[idx, "Lon"] = lat, lon
-                            df.at[idx, "Evolution Verticale"] = trend
-                            df.at[idx, "OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
-                            
-                            print(f"    ✅ Ligne existante mise à jour pour {callsign} (Point bas: {df.at[idx, 'Altitude (m)']}m)")
-                            flight_updated = True
-                            updated = True
-                            break
-                    except Exception as e:
-                        print(f"    ⚠️ Erreur lors du check de doublon: {e}")
+                            if diff_minutes < 10:
+                                # Mise à jour record existant
+                                current_pos = str(row.get("Positions", ""))
+                                if pos_entry not in current_pos:
+                                    row["Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
+                                
+                                old_alt = float(row.get("Altitude (m)") or 99999)
+                                if altitude < old_alt:
+                                    row["Altitude (m)"] = altitude
+                                
+                                row["Lat"], row["Lon"] = lat, lon
+                                row["Evolution Verticale"] = trend
+                                row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
+                                
+                                print(f"    ✅ Ligne existante mise à jour pour {callsign}")
+                                match_found = True
+                                updated = True
+                                break
+                        except: pass
                 
-                if not flight_updated:
+                if not match_found:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
                     make, model, reg, db_info_raw, hexdb_raw, ps_raw = get_real_flight_info(icao24)
-                    
                     dep, arr, h_dep, h_arr, airlabs_raw, source, hexdb_route_raw = "Inconnu", "Inconnu", "--:--", "--:--", "", "OpenSky (Live)", ""
+                    
                     al_data = get_flight_airlabs(icao24)
                     if al_data:
                         dep, arr, h_dep, h_arr, source = al_data.get("dep_iata") or al_data.get("dep_icao") or "Inconnu", al_data.get("arr_iata") or al_data.get("arr_icao") or "Inconnu", al_data.get("dep_time") or "--:--", al_data.get("arr_time") or "--:--", "AirLabs"
@@ -356,71 +340,52 @@ def run_scan():
                         if not model or model == "Inconnu": model = clean(al_data.get("model"))
                         if not reg or reg == "Inconnu": reg = clean(al_data.get("reg_number"))
                         airlabs_raw = json.dumps(al_data, ensure_ascii=False)
+                    
                     if dep == "Inconnu":
                         hexdb_result = get_route_hexdb(callsign)
                         if hexdb_result: dep, arr, hexdb_route_raw, source = hexdb_result[0], hexdb_result[1], hexdb_result[2], "hexdb"
-                    new_entries.append({
-                        "Date": now_dt.strftime("%d/%m/%Y"), 
-                        "Heure": now_dt.strftime("%H:%M"), 
-                        "Identifiant Vol (Callsign)": callsign, 
-                        "Compagnie": make, 
-                        "Modèle Avion": model, 
-                        "Immatriculation": reg, 
-                        "Identifiant Appareil (ICAO24)": icao24, 
-                        "Altitude (m)": altitude, 
-                        "Evolution Verticale": trend, 
-                        "Lat": lat, 
-                        "Lon": lon, 
-                        "Heading": heading, 
-                        "De": resolve_airport(dep), 
-                        "A": resolve_airport(arr), 
-                        "Dep_H": h_dep, 
-                        "Arr_H": h_arr, 
-                        "Source": source, 
+                    
+                    new_row = {c: "" for c in COLS_GSHEET}
+                    new_row.update({
+                        "Date": today_str, "Heure": now_dt.strftime("%H:%M"), 
+                        "Identifiant Vol (Callsign)": callsign, "Compagnie": make, 
+                        "Modèle Avion": model, "Immatriculation": reg, 
+                        "Identifiant Appareil (ICAO24)": icao24, "Altitude (m)": altitude, 
+                        "Evolution Verticale": trend, "Lat": lat, "Lon": lon, "Heading": heading, 
+                        "De": resolve_airport(dep), "A": resolve_airport(arr), 
+                        "Dep_H": h_dep, "Arr_H": h_arr, "Source": source, 
                         "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")', 
-                        "Positions": pos_entry,
-                        "Airlabs Info": airlabs_raw, 
+                        "Positions": pos_entry, "Airlabs Info": airlabs_raw, 
                         "OpenSky State Info": json.dumps(avion, ensure_ascii=False), 
-                        "Hexdb Route Info": hexdb_route_raw, 
-                        "Hexdb Aircraft Info": hexdb_raw, 
-                        "Planespotters Info": ps_raw, 
-                        "Aircraft DB Info": "", 
-                        "Nettoyage Retries": 0
+                        "Hexdb Route Info": hexdb_route_raw, "Hexdb Aircraft Info": hexdb_raw, 
+                        "Planespotters Info": ps_raw, "Nettoyage Retries": 0
                     })
+                    raw_rows.append(new_row)
+                    updated = True
 
-            if new_entries or updated:
-                print(f"📊 DEBUG : Fichier lu = {len(df)} lignes | Nouveaux vols à ajouter = {len(new_entries)}")
+            if updated:
+                # 2. Dédoublonnage final et limitation (Gardant les 2000 derniers)
+                # On trie par Date/Heure pour être sûr (format FR DD/MM/YYYY HH:MM est délicat à trier en string)
+                def sort_key(r):
+                    try: return datetime.strptime(f"{r['Date']} {r['Heure']}", "%d/%m/%Y %H:%M")
+                    except: return datetime.min
                 
-                # 1. Ajout sécurisé
-                if new_entries:
-                    df_final = pd.concat([df, pd.DataFrame(new_entries)], ignore_index=True)
-                else:
-                    df_final = df.copy()
+                raw_rows.sort(key=sort_key)
+                raw_rows = raw_rows[-2000:]
 
-                # 2. Formatage
-                df_final = df_final.reindex(columns=COLS_GSHEET).fillna("")
-                df_final = df_final.drop_duplicates(subset=["Date", "Identifiant Vol (Callsign)", "Identifiant Appareil (ICAO24)"], keep="last").tail(2000)
-
-                print(f"📊 DEBUG : Total prêt à l'envoi = {len(df_final)} lignes.")
-
-                # 3. Écriture avec gspread
+                # 3. Préparation et Écriture
                 try:
-                    # Sécurité anti-NaN : gspread/JSON ne supporte pas NaN ou Infinity
-                    df_final = df_final.replace([float('inf'), float('-inf')], None)
-                    df_final = df_final.fillna("")
-                    
-                    data_to_send = [df_final.columns.values.tolist()] + df_final.values.tolist()
-                    
-                    # Nettoyage profond pour JSON compliance
-                    clean_data = []
-                    for row_list in data_to_send:
-                        clean_row = []
-                        for val in row_list:
-                            if pd.isna(val) or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
-                                clean_row.append("")
+                    clean_data = [COLS_GSHEET]
+                    for row in raw_rows:
+                        row_vals = []
+                        for c in COLS_GSHEET:
+                            val = row.get(c, "")
+                            # Sécurité JSON/GSheets
+                            if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
+                                row_vals.append("")
                             else:
-                                clean_row.append(val)
-                        clean_data.append(clean_row)
+                                row_vals.append(val)
+                        clean_data.append(row_vals)
 
                     ws.clear()
                     ws.update(values=clean_data, range_name='A1')
@@ -428,7 +393,11 @@ def run_scan():
                 except Exception as update_err:
                     print(f"    ❌ ERREUR LORS DE L'ÉCRITURE : {update_err}")
     
-    except Exception as e: print(f"❌ ERREUR CRITIQUE : {e}")
+    except Exception as e:
+        print(f"❌ ERREUR CRITIQUE : {e}")
+        import traceback
+        traceback.print_exc()
+        
     print(f"\n💤 DÉCISION : {decision_reason}\n⏰ SOMMEIL : {next_sleep} secondes")
     return next_sleep
 
