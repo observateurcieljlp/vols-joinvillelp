@@ -383,12 +383,20 @@ def run_scan():
                             # Sécurité JSON/GSheets
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 row_vals.append("")
+                            elif c in ["Lat", "Lon"] and isinstance(val, (float, int)):
+                                # METHODE RADICALE : On force le TEXTE avec une apostrophe invisible
+                                # et on utilise le POINT pour que ce soit standard
+                                row_vals.append(f"'{float(val):.4f}")
+                            elif isinstance(val, float):
+                                # Pour les autres nombres (Altitude, etc.), la virgule suffit
+                                row_vals.append(f"{val}".replace(".", ","))
                             else:
                                 row_vals.append(val)
                         clean_data.append(row_vals)
 
                     ws.clear()
-                    ws.update(values=clean_data, range_name='A1')
+                    # USER_ENTERED nécessaire pour que l'apostrophe soit interprétée comme "Format Texte"
+                    ws.update(values=clean_data, range_name='A1', value_input_option='USER_ENTERED')
                     print(f"    ✅ Google Sheet mis à jour avec SUCCÈS via gspread.")
                 except Exception as update_err:
                     print(f"    ❌ ERREUR LORS DE L'ÉCRITURE : {update_err}")
