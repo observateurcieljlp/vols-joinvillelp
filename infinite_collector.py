@@ -278,9 +278,7 @@ def run_scan():
             # 1. Lecture native via gspread
             try:
                 raw_rows = ws.get_all_records()
-                # On s'assure que toutes les colonnes existent pour chaque dictionnaire
                 for row in raw_rows:
-                    # Renommage legacy pour compatibilité interne si nécessaire
                     if "Avion" in row: row["Identifiant Vol (Callsign)"] = row.pop("Avion")
                     if "icao24" in row: row["Identifiant Appareil (ICAO24)"] = row.pop("icao24")
                     if "Altitude" in row: row["Altitude (m)"] = row.pop("Altitude")
@@ -290,7 +288,7 @@ def run_scan():
                 raw_rows = []
 
             updated = False
-            new_entries = [] # <--- INITIALISATION MANQUANTE AJOUTÉE ICI
+            new_entries = []
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude, v_rate, lat, lon, heading = int(avion[13] or avion[7] or 0), avion[11] or 0, avion[6], avion[5], avion[10] or 0
@@ -310,7 +308,6 @@ def run_scan():
                                               datetime.combine(now_dt.date(), heure_sheet)).total_seconds() / 60)
                             
                             if diff_minutes < 10:
-                                # Mise à jour record existant
                                 current_pos = str(row.get("Positions", ""))
                                 if pos_entry not in current_pos:
                                     row["Positions"] = (current_pos + " | " + pos_entry).strip(" | ")
@@ -322,7 +319,7 @@ def run_scan():
                                 row["Lat"], row["Lon"] = lat, lon
                                 row["Evolution Verticale"] = trend
                                 row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
-                                row["_is_dirty"] = True # <--- DRAPEAU POUR MISE À JOUR CHIRURGICALE
+                                row["_is_dirty"] = True
                                 
                                 print(f"    ✅ Ligne existante mise à jour pour {callsign}")
                                 match_found = True
@@ -362,13 +359,13 @@ def run_scan():
                         "Hexdb Route Info": hexdb_route_raw, "Hexdb Aircraft Info": hexdb_raw, 
                         "Planespotters Info": ps_raw, "Nettoyage Retries": 0
                     })
-                    raw_rows.append(new_row)
-                    updated = True
+                    new_entries.append(new_row)
 
             # ==========================================
             # ÉCRITURE CHIRURGICALE (Batch Update & Append)
             # ==========================================
-            if updated or new_entries:
+            has_new = len(new_entries) > 0
+            if updated or has_new:
                 try:
                     def format_row_for_gsheets(row_dict):
                         formatted = []
@@ -377,7 +374,6 @@ def run_scan():
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 formatted.append("")
                             elif isinstance(val, float):
-                                # Alignement sur le Cleaner : Virgule + Precision 4 pour Lat/Lon
                                 if c in ["Lat", "Lon"]:
                                     formatted.append(f"{val:.4f}".replace(".", ","))
                                 else:
@@ -386,24 +382,18 @@ def run_scan():
                                 formatted.append(val)
                         return formatted
 
-                    # A. Mise à jour des lignes existantes modifiées (Uniquement celles qui ont bougé)
                     if updated:
                         updates = []
                         for i, row in enumerate(raw_rows):
-                            # On ne renvoie la ligne que si elle a été marquée "dirty"
-                            # Pour simplifier ici, on vérifie si la ligne contient les infos temps réel
-                            # du scan actuel (on pourrait tracker plus finement avec un flag)
                             if row.get("_is_dirty"):
-                                del row["_is_dirty"] # Nettoyage avant envoi
+                                del row["_is_dirty"]
                                 updates.append({'range': f'A{i+2}', 'values': [format_row_for_gsheets(row)]})
-                        
                         if updates:
                             ws.batch_update(updates, value_input_option='USER_ENTERED')
                             print(f"    ✅ {len(updates)} vol(s) existant(s) mis à jour.")
 
-                    # B. Ajout des nouveaux vols (Append pur)
-                    if new_entries:
-                        rows_to_append = [format_row_for_gsheets(e) for e in new_entries]
+                    if has_new:
+                        rows_to_append = [format_row_for_gsheets(entry) for entry in new_entries]
                         ws.append_rows(rows_to_append, value_input_option='USER_ENTERED')
                         print(f"    🆕 {len(new_entries)} nouveau(x) vol(s) ajouté(s).")
 
