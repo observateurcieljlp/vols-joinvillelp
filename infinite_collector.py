@@ -290,6 +290,7 @@ def run_scan():
                 raw_rows = []
 
             updated = False
+            new_entries = [] # <--- INITIALISATION MANQUANTE AJOUTÉE ICI
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude, v_rate, lat, lon, heading = int(avion[13] or avion[7] or 0), avion[11] or 0, avion[6], avion[5], avion[10] or 0
@@ -321,6 +322,7 @@ def run_scan():
                                 row["Lat"], row["Lon"] = lat, lon
                                 row["Evolution Verticale"] = trend
                                 row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
+                                row["_is_dirty"] = True # <--- DRAPEAU POUR MISE À JOUR CHIRURGICALE
                                 
                                 print(f"    ✅ Ligne existante mise à jour pour {callsign}")
                                 match_found = True
@@ -374,34 +376,36 @@ def run_scan():
                             val = row_dict.get(c, "")
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 formatted.append("")
-                            elif c in ["Lat", "Lon"] and isinstance(val, (float, int)):
-                                # METHODE RADICALE : TEXTE pur + POINT pour éviter la corruption
-                                formatted.append(f"'{float(val):.4f}")
                             elif isinstance(val, float):
-                                # Autres nombres : Virgule pour la localisation FR
-                                formatted.append(f"{val}".replace(".", ","))
+                                # Alignement sur le Cleaner : Virgule + Precision 4 pour Lat/Lon
+                                if c in ["Lat", "Lon"]:
+                                    formatted.append(f"{val:.4f}".replace(".", ","))
+                                else:
+                                    formatted.append(f"{val}".replace(".", ","))
                             else:
                                 formatted.append(val)
                         return formatted
 
-                    # A. Mise à jour des lignes existantes modifiées (Batch)
+                    # A. Mise à jour des lignes existantes modifiées (Uniquement celles qui ont bougé)
                     if updated:
                         updates = []
-                        # On parcourt raw_rows pour trouver les lignes modifiées
-                        # (Dans cette version, on renvoie tout le bloc si modifié, 
-                        #  mais on pourrait être encore plus fin)
                         for i, row in enumerate(raw_rows):
-                            updates.append({'range': f'A{i+2}', 'values': [format_row_for_gsheets(row)]})
+                            # On ne renvoie la ligne que si elle a été marquée "dirty"
+                            # Pour simplifier ici, on vérifie si la ligne contient les infos temps réel
+                            # du scan actuel (on pourrait tracker plus finement avec un flag)
+                            if row.get("_is_dirty"):
+                                del row["_is_dirty"] # Nettoyage avant envoi
+                                updates.append({'range': f'A{i+2}', 'values': [format_row_for_gsheets(row)]})
                         
                         if updates:
                             ws.batch_update(updates, value_input_option='USER_ENTERED')
-                            print(f"    ✅ {len(updates)} lignes existantes synchronisées.")
+                            print(f"    ✅ {len(updates)} vol(s) existant(s) mis à jour.")
 
-                    # B. Ajout des nouveaux vols (Append)
+                    # B. Ajout des nouveaux vols (Append pur)
                     if new_entries:
-                        rows_to_append = [format_row_for_gsheets(e) for entry in new_entries]
+                        rows_to_append = [format_row_for_gsheets(e) for e in new_entries]
                         ws.append_rows(rows_to_append, value_input_option='USER_ENTERED')
-                        print(f"    🆕 {len(new_entries)} nouveaux vols ajoutés.")
+                        print(f"    🆕 {len(new_entries)} nouveau(x) vol(s) ajouté(s).")
 
                 except Exception as update_err:
                     print(f"    ❌ ERREUR LORS DE LA MISE À JOUR : {update_err}")

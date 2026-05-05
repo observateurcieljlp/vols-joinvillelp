@@ -17,8 +17,8 @@ def refresh_aircraft_db():
     url = "https://opensky-network.org/datasets/metadata/aircraftDatabase.csv"
     
     try:
-        # On utilise une connexion SQLite
-        conn = sqlite3.connect(DB_FILE)
+        # On utilise une connexion SQLite avec un timeout de 30s pour éviter les "database is locked"
+        conn = sqlite3.connect(DB_FILE, timeout=30)
         cursor = conn.cursor()
         
         # Création de la table
@@ -91,7 +91,8 @@ def get_aircraft_info(icao24):
         if not os.path.exists(DB_FILE):
             return "Inconnu", "Inconnu", "Inconnu", ""
             
-        conn = sqlite3.connect(DB_FILE)
+        # Timeout de 30s ici aussi pour la lecture
+        conn = sqlite3.connect(DB_FILE, timeout=30)
         conn.row_factory = sqlite3.Row # Pour accéder aux colonnes par nom
         cursor = conn.cursor()
         
