@@ -184,8 +184,8 @@ def main():
             if ts > (now_ts - 600): continue 
             
             source = get_val("Source")
-            de = get_val("De").lower()
-            a = get_val("A").lower()
+            val_de = get_val("De").lower()
+            val_a = get_val("A").lower()
             dep_h = get_val("Dep_H")
             arr_h = get_val("Arr_H")
             vides = ["", "inconnu", "nan", "none", "?", "--:--"]
