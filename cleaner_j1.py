@@ -264,9 +264,19 @@ def main():
 
         # 4. Envoi des mises à jour PAR LOTS
         if updates:
-            print(f"\n💾 Envoi de {len(updates)} mises à jour chirurgicales...")
-            ws.batch_update(updates, value_input_option='USER_ENTERED')
-            print(f"✅ Terminé ({success_count} enrichissements réussis).")
+            print(f"\n💾 Préparation de {len(updates)} mises à jour...")
+            # Debug : Afficher le contenu du premier update pour vérification
+            first = updates[0]
+            print(f"    [DEBUG] Premier update sur {first['range']}: {first['values'][0][:5]}...")
+            
+            try:
+                # On utilise batch_update avec value_input_option='USER_ENTERED'
+                # C'est la méthode recommandée pour modifier des lignes éparpillées
+                ws.batch_update(updates, value_input_option='USER_ENTERED')
+                print(f"✅ Google Sheets a confirmé la réception des {len(updates)} lignes.")
+                print(f"🚀 {success_count} vols ont été enrichis avec succès.")
+            except Exception as api_err:
+                print(f"❌ ERREUR API GOOGLE : {api_err}")
         else:
             print("\n✅ Rien à mettre à jour.")
 
