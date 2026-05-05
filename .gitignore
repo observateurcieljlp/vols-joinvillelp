@@ -6,3 +6,7 @@ aircraft_db.parquet
 test_airlabs.py
 aircraftDatabase.csv
 *.log
+service_account.json
+config.json
+*.db
+*.sqlite

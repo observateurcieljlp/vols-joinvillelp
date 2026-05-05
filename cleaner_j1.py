@@ -14,22 +14,75 @@ import json
 import time
 import requests
 import pandas as pd
-import streamlit as st
-from streamlit_gsheets import GSheetsConnection
+import gspread
+from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 from curl_cffi import requests as cf_requests
 import pytz
 
-# Désactiver ABSOLUMENT TOUS les logs internes (Streamlit, GSheets, etc.)
-logging.disable(logging.CRITICAL)
-warnings.filterwarnings("ignore")
-os.environ["STREAMLIT_LOG_LEVEL"] = "error"
-
 # ---------------------------------------------------------------------------
-# Configuration
+# Configuration & SECRETS
 # ---------------------------------------------------------------------------
 
-WORKSHEET = "Vols_Joinville"
+def load_config():
+    """Charge les secrets depuis secrets.toml, config.json ou variables d'environnement"""
+    config = {}
+    
+    # 1. Tentative lecture secrets.toml (Streamlit format)
+    secrets_path = os.path.join(".streamlit", "secrets.toml")
+    if os.path.exists(secrets_path):
+        try:
+            with open(secrets_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line:
+                        key, val = line.split("=", 1)
+                        config[key.strip()] = val.strip().strip('"').strip("'")
+        except Exception as e:
+            print(f"⚠️ Erreur lecture secrets.toml : {e}")
+
+    # 2. Tentative lecture config.json (Overide)
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r") as f:
+                config.update(json.load(f))
+        except Exception as e:
+            print(f"⚠️ Erreur lecture config.json : {e}")
+    
+    # 3. Fallback sur les variables d'environnement
+    for key in ["AIRLABS_API_KEY", "OPENSKY_USER", "OPENSKY_PWD", "OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET", "GOOGLE_SHEET_NAME", "spreadsheet"]:
+        if key not in config:
+            config[key] = os.environ.get(key, "")
+    return config
+
+CONFIG = load_config()
+
+def get_gsheet_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    if os.path.exists("service_account.json"):
+        creds = Credentials.from_service_account_file("service_account.json", scopes=scope)
+        return gspread.authorize(creds)
+    else:
+        print("❌ Fichier service_account.json introuvable !")
+        return None
+
+def get_worksheet():
+    client = get_gsheet_client()
+    if not client: return None
+    try:
+        # Priorité à l'URL (plus fiable)
+        sheet_url = CONFIG.get("spreadsheet")
+        if sheet_url:
+            sh = client.open_by_url(sheet_url)
+        else:
+            sheet_name = CONFIG.get("GOOGLE_SHEET_NAME", "Radar_Joinville")
+            sh = client.open(sheet_name)
+        return sh.worksheet("Vols_Joinville")
+    except Exception as e:
+        print(f"❌ Erreur accès Google Sheet : {e}")
+        return None
+
+WORKSHEET_NAME = "Vols_Joinville"
 
 # SCHÉMA GLOBAL UNIQUE (Synchro entre tous les scripts)
 COLS = [
@@ -216,11 +269,13 @@ def main():
     print(f"\n{'='*60}\n🧹 DÉMARRAGE DU NETTOYEUR J+1 : {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}\n{'='*60}")
     
     try:
-        user, pwd = st.secrets.get("OPENSKY_USER", "").lower(), st.secrets.get("OPENSKY_PWD", "")
-        conn = st.connection("gsheets", type=GSheetsConnection)
+        user, pwd = CONFIG.get("OPENSKY_USER", "").lower(), CONFIG.get("OPENSKY_PWD", "")
+        ws = get_worksheet()
+        if not ws: return
         
         # 1. Lecture et mise en forme
-        df = conn.read(worksheet="Vols_Joinville", ttl=0)
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
         if df.empty:
             print("   Base vide.")
             return
@@ -339,8 +394,33 @@ def main():
         if df_modified:
             cols_to_drop = [c for c in ["ts_matching", "is_eligible"] if c in df.columns]
             df_final = df.drop(columns=cols_to_drop)
-            conn.update(worksheet=WORKSHEET, data=df_final.fillna(""))
-            print(f"\n💾 GSheets mis à jour ({success_count} succès).")
+            
+            # Sécurité anti-NaN : gspread/JSON ne supporte pas NaN ou Infinity
+            # On remplace par des chaînes vides
+            df_final = df_final.replace([float('inf'), float('-inf')], None)
+            df_final = df_final.fillna("")
+            
+            try:
+                # Préparation des données avant de vider la feuille
+                data_to_send = [df_final.columns.values.tolist()] + df_final.values.tolist()
+                
+                # Conversion explicite en string pour tout ce qui n'est pas JSON compliant
+                # (Certains types numériques pandas peuvent poser problème)
+                clean_data = []
+                for row_list in data_to_send:
+                    clean_row = []
+                    for val in row_list:
+                        if pd.isna(val) or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
+                            clean_row.append("")
+                        else:
+                            clean_row.append(val)
+                    clean_data.append(clean_row)
+
+                ws.clear()
+                ws.update(values=clean_data, range_name='A1')
+                print(f"\n💾 GSheets mis à jour via gspread ({success_count} succès).")
+            except Exception as update_err:
+                print(f"❌ Erreur lors de la mise à jour GSheets : {update_err}")
 
     except Exception as e:
         print(f"❌ ERREUR CRITIQUE : {e}")

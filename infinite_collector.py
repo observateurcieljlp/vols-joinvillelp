@@ -5,24 +5,75 @@ import time
 import math
 import json
 from datetime import datetime
-import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-from FlightRadar24 import FlightRadar24API
+import gspread
+from google.oauth2.service_account import Credentials
 from utils_aircraft import refresh_aircraft_db, get_aircraft_info
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import warnings
 import logging
 
-# Silence total
-# logging.disable(logging.CRITICAL)
-# warnings.filterwarnings("ignore")
-os.environ["STREAMLIT_LOG_LEVEL"] = "error"
-os.environ["STREAMLIT_SERVER_GATHER_USAGE_STATS"] = "false"
+# =============================================================================
+# CONFIGURATION & SECRETS
+# =============================================================================
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
+def load_config():
+    """Charge les secrets depuis secrets.toml, config.json ou variables d'environnement"""
+    config = {}
+    
+    # 1. Tentative lecture secrets.toml (Streamlit format)
+    secrets_path = os.path.join(".streamlit", "secrets.toml")
+    if os.path.exists(secrets_path):
+        try:
+            with open(secrets_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if "=" in line:
+                        key, val = line.split("=", 1)
+                        config[key.strip()] = val.strip().strip('"').strip("'")
+        except Exception as e:
+            print(f"⚠️ Erreur lecture secrets.toml : {e}")
+
+    # 2. Tentative lecture config.json (Overide)
+    if os.path.exists("config.json"):
+        try:
+            with open("config.json", "r") as f:
+                config.update(json.load(f))
+        except Exception as e:
+            print(f"⚠️ Erreur lecture config.json : {e}")
+    
+    # 3. Fallback sur les variables d'environnement
+    for key in ["AIRLABS_API_KEY", "OPENSKY_USER", "OPENSKY_PWD", "OPENSKY_CLIENT_ID", "OPENSKY_CLIENT_SECRET", "GOOGLE_SHEET_NAME", "spreadsheet"]:
+        if key not in config:
+            config[key] = os.environ.get(key, "")
+    return config
+
+CONFIG = load_config()
+
+def get_gsheet_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    if os.path.exists("service_account.json"):
+        creds = Credentials.from_service_account_file("service_account.json", scopes=scope)
+        return gspread.authorize(creds)
+    else:
+        print("❌ Fichier service_account.json introuvable !")
+        return None
+
+def get_worksheet():
+    client = get_gsheet_client()
+    if not client: return None
+    try:
+        # Priorité à l'URL (plus fiable)
+        sheet_url = CONFIG.get("spreadsheet")
+        if sheet_url:
+            sh = client.open_by_url(sheet_url)
+        else:
+            sheet_name = CONFIG.get("GOOGLE_SHEET_NAME", "Radar_Joinville")
+            sh = client.open(sheet_name)
+        return sh.worksheet("Vols_Joinville")
+    except Exception as e:
+        print(f"❌ Erreur accès Google Sheet : {e}")
+        return None
 
 BBOX_WATCH = {"lamin": 48.40, "lamax": 49.20, "lomin": 2.00, "lomax": 3.00}
 BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
@@ -45,7 +96,6 @@ COLS_GSHEET = [
 # INITIALISATION & API
 # =============================================================================
 pd.set_option('future.no_silent_downcasting', True)
-fr_api = FlightRadar24API()
 refresh_aircraft_db()
 
 session = requests.Session()
@@ -73,7 +123,7 @@ def clean(v) -> str:
 
 def get_flight_airlabs(icao24: str) -> dict | None:
     try:
-        api_key = st.secrets.get("AIRLABS_API_KEY", "")
+        api_key = CONFIG.get("AIRLABS_API_KEY", "")
         if not api_key: return None
         url = f"https://airlabs.co/api/v9/flights?hex={icao24.lower()}&api_key={api_key}"
         print(f"    [API AirLabs]   requête -> {url}")
@@ -167,8 +217,8 @@ def get_opensky_token():
     global _opensky_token, _token_expiry
     if _opensky_token and time.time() < _token_expiry - 60: return _opensky_token
     try:
-        client_id = st.secrets.get("OPENSKY_CLIENT_ID") or st.secrets.get("OPENSKY_USER")
-        client_secret = st.secrets.get("OPENSKY_CLIENT_SECRET") or st.secrets.get("OPENSKY_PWD")
+        client_id = CONFIG.get("OPENSKY_CLIENT_ID") or CONFIG.get("OPENSKY_USER")
+        client_secret = CONFIG.get("OPENSKY_CLIENT_SECRET") or CONFIG.get("OPENSKY_PWD")
         payload = {"grant_type": "client_credentials", "client_id": client_id, "client_secret": client_secret}
         r = requests.post("https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token", data=payload, timeout=15)
         if r.status_code == 200:
@@ -233,9 +283,11 @@ def run_scan():
             else: print(f"  ☁️ [TROP HAUT] {callsign} à {int(altitude)}m - Ignoré")
 
         if candidates:
-            conn = st.connection("gsheets", type=GSheetsConnection)
+            ws = get_worksheet()
+            if not ws: return next_sleep
             try:
-                df = conn.read(worksheet="Vols_Joinville", ttl=0)
+                data = ws.get_all_records()
+                df = pd.DataFrame(data)
                 df = df.rename(columns={"Avion":"Identifiant Vol (Callsign)","icao24":"Identifiant Appareil (ICAO24)","Altitude":"Altitude (m)"})
                 for c in COLS_GSHEET:
                     if c not in df.columns: df[c] = ""
@@ -243,6 +295,7 @@ def run_scan():
             except: df = pd.DataFrame(columns=COLS_GSHEET)
 
             new_entries = []
+            updated = False
             for avion in candidates:
                 icao24, callsign = avion[0], str(avion[1]).strip() or "Inconnu"
                 altitude, v_rate, lat, lon, heading = int(avion[13] or avion[7] or 0), avion[11] or 0, avion[6], avion[5], avion[10] or 0
@@ -256,7 +309,7 @@ def run_scan():
                 match = df[(df["Identifiant Appareil (ICAO24)"] == icao24) & 
                            (df["Date"] == now_dt.strftime("%d/%m/%Y"))]
                 
-                updated = False
+                flight_updated = False
                 for idx in match.index:
                     try:
                         # On récupère l'heure de la ligne (en ignorant les secondes si elles existent)
@@ -285,12 +338,13 @@ def run_scan():
                             df.at[idx, "OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
                             
                             print(f"    ✅ Ligne existante mise à jour pour {callsign} (Point bas: {df.at[idx, 'Altitude (m)']}m)")
+                            flight_updated = True
                             updated = True
                             break
                     except Exception as e:
                         print(f"    ⚠️ Erreur lors du check de doublon: {e}")
                 
-                if not updated:
+                if not flight_updated:
                     print(f"    🆕 Nouvel enregistrement pour {callsign}")
                     make, model, reg, db_info_raw, hexdb_raw, ps_raw = get_real_flight_info(icao24)
                     
@@ -324,7 +378,7 @@ def run_scan():
                         "Arr_H": h_arr, 
                         "Source": source, 
                         "Planespotters": f'=HYPERLINK("https://www.planespotters.net/hex/{icao24.upper()}","{icao24.upper()}")', 
-                        "Positions": pos_entry,  # <--- CORRIGÉ ICI (au lieu de pos_str)
+                        "Positions": pos_entry,
                         "Airlabs Info": airlabs_raw, 
                         "OpenSky State Info": json.dumps(avion, ensure_ascii=False), 
                         "Hexdb Route Info": hexdb_route_raw, 
@@ -333,9 +387,7 @@ def run_scan():
                         "Aircraft DB Info": "", 
                         "Nettoyage Retries": 0
                     })
-            # ==========================================
-            # NOUVEAU BLOC DE SAUVEGARDE (À REMPLACER)
-            # ==========================================
+
             if new_entries or updated:
                 print(f"📊 DEBUG : Fichier lu = {len(df)} lignes | Nouveaux vols à ajouter = {len(new_entries)}")
                 
@@ -351,12 +403,30 @@ def run_scan():
 
                 print(f"📊 DEBUG : Total prêt à l'envoi = {len(df_final)} lignes.")
 
-                # 3. Écriture avec capture d'erreur stricte
+                # 3. Écriture avec gspread
                 try:
-                    conn.update(worksheet="Vols_Joinville", data=df_final)
-                    print(f"    ✅ Google Sheet mis à jour avec SUCCÈS.")
+                    # Sécurité anti-NaN : gspread/JSON ne supporte pas NaN ou Infinity
+                    df_final = df_final.replace([float('inf'), float('-inf')], None)
+                    df_final = df_final.fillna("")
+                    
+                    data_to_send = [df_final.columns.values.tolist()] + df_final.values.tolist()
+                    
+                    # Nettoyage profond pour JSON compliance
+                    clean_data = []
+                    for row_list in data_to_send:
+                        clean_row = []
+                        for val in row_list:
+                            if pd.isna(val) or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
+                                clean_row.append("")
+                            else:
+                                clean_row.append(val)
+                        clean_data.append(clean_row)
+
+                    ws.clear()
+                    ws.update(values=clean_data, range_name='A1')
+                    print(f"    ✅ Google Sheet mis à jour avec SUCCÈS via gspread.")
                 except Exception as update_err:
-                    print(f"    ❌ ERREUR CACHÉE LORS DE L'ÉCRITURE : {update_err}")
+                    print(f"    ❌ ERREUR LORS DE L'ÉCRITURE : {update_err}")
     
     except Exception as e: print(f"❌ ERREUR CRITIQUE : {e}")
     print(f"\n💤 DÉCISION : {decision_reason}\n⏰ SOMMEIL : {next_sleep} secondes")

@@ -1,10 +1,10 @@
 requests
 pandas
 streamlit
-st-gsheets-connection
+gspread
+google-auth
 FlightRadarAPI
 beautifulsoup4
-pyarrow
 urllib3
 pydeck
 pytz
