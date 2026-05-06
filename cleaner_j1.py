@@ -259,10 +259,13 @@ def main():
                             col_name = header[idx]
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 new_row[idx] = ""
-                            elif col_name in ["Lat", "Lon"] and isinstance(val, (float, int)):
-                                new_row[idx] = f"'{float(val):.4f}"
+                            elif col_name in ["Lat", "Lon"]:
+                                try:
+                                    v_float = float(str(val).replace(",", "."))
+                                    new_row[idx] = f"{v_float:.4f}".replace(".", ",")
+                                except: pass
                             elif isinstance(val, float):
-                                new_row[idx] = str(val).replace(".", ",")
+                                new_row[idx] = f"{val}".replace(".", ",")
 
                     updates.append({'range': f'A{row_num}', 'values': [new_row]})
                     success_count += 1
