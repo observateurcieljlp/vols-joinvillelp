@@ -1,11 +1,12 @@
-requests
-pandas
 streamlit
+pandas
+pydeck
+st-gsheets-connection
+requests
 gspread
 google-auth
+pytz
+curl_cffi
 FlightRadarAPI
 beautifulsoup4
 urllib3
-pydeck
-pytz
-curl_cffi

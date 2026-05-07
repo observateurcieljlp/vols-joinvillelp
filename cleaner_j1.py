@@ -196,7 +196,11 @@ def main():
             
             def get_val(name):
                 idx = col_map.get(name)
-                return row_vals[idx] if idx is not None and idx < len(row_vals) else ""
+                val = row_vals[idx] if idx is not None and idx < len(row_vals) else ""
+                # Si c'est une coordonnée ou un nombre avec virgule, on normalise pour le script
+                if name in ["Lat", "Lon", "Altitude (m)", "Nettoyage Retries"] and isinstance(val, str) and "," in val:
+                    return val.replace(",", ".")
+                return val
 
             callsign = get_val("Identifiant Vol (Callsign)")
             date_str = get_val("Date")
@@ -219,12 +223,12 @@ def main():
             vides = ["", "inconnu", "nan", "none", "?", "--:--"]
             
             is_unreliable = source in ["", "hexdb", "OpenSky (Live)"]
-            is_missing_airport = val_de.lower() in vides or val_a.lower() in vides
+            is_missing_airport = str(val_de).lower() in vides or str(val_a).lower() in vides
             is_missing_times = dep_h in vides or arr_h in vides
             
             should_clean = is_unreliable or is_missing_airport or is_missing_times
 
-            try: retries = int(get_val("Nettoyage Retries") or 0)
+            try: retries = int(float(get_val("Nettoyage Retries") or 0))
             except: retries = 0
 
             if should_clean and retries < MAX_RETRIES:
@@ -242,7 +246,17 @@ def main():
                         if idx < len(new_row): new_row[idx] = val
                     
                     def set_val(name, val):
-                        if name in col_map: new_row[col_map[name]] = val
+                        if name in col_map: 
+                            # Si c'est un nombre, on s'assure du format virgule pour GSheets
+                            if name in ["Lat", "Lon"] and val:
+                                try:
+                                    f_val = float(str(val).replace(",", "."))
+                                    new_row[col_map[name]] = f"{f_val:.4f}".replace(".", ",")
+                                except: new_row[col_map[name]] = val
+                            elif isinstance(val, float):
+                                new_row[col_map[name]] = f"{val}".replace(".", ",")
+                            else:
+                                new_row[col_map[name]] = val
 
                     set_val("De", resolve_airport(dep))
                     set_val("A", resolve_airport(arr) if arr else "Inconnu")
@@ -251,21 +265,16 @@ def main():
                     set_val("Source", "FlightAware (Web)" if f_info else "OpenSky (History)")
                     if f_info and f_info.get("aircraft"):
                         old_model = get_val("Modèle Avion")
-                        if not old_model or old_model in vides: set_val("Modèle Avion", f_info["aircraft"])
+                        if not old_model or str(old_model).lower() in vides: set_val("Modèle Avion", f_info["aircraft"])
                     
-                    # Adaptation Locale & Sécurité Formatage
+                    # Sécurité finale sur toute la ligne
                     for idx, val in enumerate(new_row):
-                        if idx < len(header):
-                            col_name = header[idx]
-                            if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
-                                new_row[idx] = ""
-                            elif col_name in ["Lat", "Lon"]:
-                                try:
-                                    v_float = float(str(val).replace(",", "."))
-                                    new_row[idx] = f"{v_float:.4f}".replace(".", ",")
-                                except: pass
-                            elif isinstance(val, float):
-                                new_row[idx] = f"{val}".replace(".", ",")
+                        col_name = header[idx]
+                        if col_name in ["Lat", "Lon"]:
+                             if val and "," not in str(val) and "." in str(val):
+                                 new_row[idx] = str(val).replace(".", ",")
+                        elif isinstance(val, float):
+                             new_row[idx] = str(val).replace(".", ",")
 
                     updates.append({'range': f'A{row_num}', 'values': [new_row]})
                     success_count += 1
