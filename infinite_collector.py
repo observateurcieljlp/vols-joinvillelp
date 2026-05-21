@@ -11,6 +11,10 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import warnings
 import logging
+try:
+    from curl_cffi import requests as cf_requests
+except ImportError:
+    cf_requests = None
 
 # =============================================================================
 # CONFIGURATION & SECRETS
@@ -138,6 +142,8 @@ def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
     cs = callsign.strip().upper()
     if not cs or cs == "INCONNU": return None
     url = f"https://hexdb.io/api/v1/route/icao/{cs}"
+    
+    # Tentative 1: Requests standard
     try:
         r = session.get(url, timeout=5)
         if r.status_code == 200:
@@ -146,17 +152,47 @@ def get_route_hexdb(callsign: str) -> tuple[str, str, str] | None:
             route = data.get("route", "")
             parts = route.split("-")
             if len(parts) == 2 and all(parts): return parts[0], parts[1], raw_json
-    except: pass
+        elif r.status_code != 404:
+            print(f"    [HexDB Route] Status {r.status_code} pour {cs}")
+    except Exception as e:
+        print(f"    [HexDB Route] Erreur Requests: {e}")
+
+    # Tentative 2: Fallback curl_cffi si possible
+    if cf_requests:
+        try:
+            r = cf_requests.get(url, timeout=10, impersonate="chrome124")
+            if r.status_code == 200:
+                data = r.json()
+                raw_json = json.dumps(data, ensure_ascii=False)
+                route = data.get("route", "")
+                parts = route.split("-")
+                if len(parts) == 2 and all(parts): return parts[0], parts[1], raw_json
+        except: pass
     return None
 
 def get_aircraft_hexdb(icao24: str) -> tuple[str, str, str, str]:
     url = f"https://hexdb.io/api/v1/aircraft/{icao24.lower()}"
+    
+    # Tentative 1: Requests standard
     try:
         r = session.get(url, timeout=5)
         if r.status_code == 200:
             d = r.json()
             return d.get("RegisteredOwners", ""), d.get("Type", ""), d.get("Registration", ""), json.dumps(d, ensure_ascii=False)
-    except: pass
+        elif r.status_code != 404:
+             print(f"    [HexDB Aircraft] Status {r.status_code} pour {icao24}")
+    except Exception as e:
+        print(f"    [HexDB Aircraft] Erreur Requests: {e}")
+
+    # Tentative 2: Fallback curl_cffi
+    if cf_requests:
+        try:
+            r = cf_requests.get(url, timeout=10, impersonate="chrome124")
+            if r.status_code == 200:
+                d = r.json()
+                return d.get("RegisteredOwners", ""), d.get("Type", ""), d.get("Registration", ""), json.dumps(d, ensure_ascii=False)
+        except: pass
+
     return "", "", "", ""
 
 def get_aircraft_planespotters(icao24: str) -> tuple[str, str, str]:
@@ -176,8 +212,11 @@ def resolve_airport(code: str) -> str:
     code = code.strip().upper()
     if not code or code in ("INCONNU", "?", ""): return code
     if code in _airport_cache: return _airport_cache[code]
+    
+    endpoint = f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}"
+    
+    # Tentative 1: Requests
     try:
-        endpoint = f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}"
         r = session.get(endpoint, timeout=5)
         if r.status_code == 200:
             nom = r.json().get("airport", "").strip()
@@ -186,6 +225,19 @@ def resolve_airport(code: str) -> str:
             _airport_cache[code] = res
             return res
     except: pass
+
+    # Tentative 2: curl_cffi
+    if cf_requests:
+        try:
+            r = cf_requests.get(endpoint, timeout=10, impersonate="chrome124")
+            if r.status_code == 200:
+                nom = r.json().get("airport", "").strip()
+                for s in (" Airport", " International Airport", " Intl", " International"): nom = nom.replace(s, "")
+                res = f"{nom} ({code})" if nom else code
+                _airport_cache[code] = res
+                return res
+        except: pass
+
     _airport_cache[code] = code
     return code
 

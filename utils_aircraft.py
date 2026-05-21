@@ -52,11 +52,12 @@ def refresh_aircraft_db():
         """)
         
         # Téléchargement en streaming pour économiser la RAM
-        response = requests.get(url, stream=True)
+        response = requests.get(url, stream=True, timeout=30)
         if response.status_code == 200:
-            # On décode le flux CSV ligne par ligne
-            csv_reader = csv.reader(io.TextIOWrapper(response.raw, encoding='utf-8'))
-            header = next(csv_reader) # Sauter le header
+            # On utilise iter_lines pour éviter les problèmes de flux fermé
+            lines = response.iter_lines(decode_unicode=True)
+            header = next(lines) # Sauter le header
+            csv_reader = csv.reader(lines)
             
             # Préparation de l'insertion massive (bulk insert)
             buffer = []
@@ -70,7 +71,7 @@ def refresh_aircraft_db():
                 if len(buffer) >= 1000:
                     cursor.executemany("INSERT OR REPLACE INTO aircraft VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", buffer)
                     buffer = []
-                    if count % 50000 == 0:
+                    if count % 100000 == 0:
                         print(f"  ... {count} avions importés")
             
             if buffer:

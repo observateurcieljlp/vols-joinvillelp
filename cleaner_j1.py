@@ -143,14 +143,28 @@ def resolve_airport(code):
     code = str(code).strip().upper()
     if not code or code in ("INCONNU", "?", "", "NONE", "NAN"): return "Inconnu"
     if code in _airport_cache: return _airport_cache[code]
+    
+    url = f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}"
+    # Tentative 1: Requests
     try:
-        r = requests.get(f"https://hexdb.io/api/v1/airport/{'icao' if len(code)==4 else 'iata'}/{code}", timeout=5)
+        r = requests.get(url, timeout=5)
         if r.status_code == 200:
             nom = r.json().get("airport", "").strip()
             for s in (" Airport", " International Airport", " Intl", " International"): nom = nom.replace(s, "")
             _airport_cache[code] = f"{nom} ({code})" if nom else code
             return _airport_cache[code]
     except: pass
+    
+    # Tentative 2: curl_cffi
+    try:
+        r = cf_requests.get(url, timeout=10, impersonate="chrome124")
+        if r.status_code == 200:
+            nom = r.json().get("airport", "").strip()
+            for s in (" Airport", " International Airport", " Intl", " International"): nom = nom.replace(s, "")
+            _airport_cache[code] = f"{nom} ({code})" if nom else code
+            return _airport_cache[code]
+    except: pass
+
     return code
 
 # ---------------------------------------------------------------------------
