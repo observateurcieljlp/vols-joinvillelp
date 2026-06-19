@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import warnings
 import logging
 import re
@@ -55,6 +56,14 @@ def load_config():
 
 CONFIG = load_config()
 
+# =============================================================================
+# SITES D'OBSERVATION (miroir du collecteur — même clés, même onglets)
+# =============================================================================
+SITES = {
+    "joinville": {"worksheet": "Vols_Joinville", "label": "Joinville-le-Pont"},
+    "pessac":    {"worksheet": "Vols_Pessac",    "label": "Pessac"},
+}
+
 def get_gsheet_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     if os.path.exists("service_account.json"):
@@ -62,14 +71,14 @@ def get_gsheet_client():
         return gspread.authorize(creds)
     return None
 
-def get_worksheet():
+def get_worksheet(worksheet_name="Vols_Joinville"):
     client = get_gsheet_client()
     if not client: return None
     try:
         sheet_url = CONFIG.get("spreadsheet")
         sh = client.open_by_url(sheet_url) if sheet_url else client.open(CONFIG.get("GOOGLE_SHEET_NAME", "Radar_Joinville"))
         print(f"📂 Liste des onglets : {[w.title for w in sh.worksheets()]}")
-        return sh.worksheet("Vols_Joinville")
+        return sh.worksheet(worksheet_name)
     except: return None
 
 COLS = [
@@ -172,11 +181,23 @@ def resolve_airport(code):
 # ---------------------------------------------------------------------------
 
 def main():
-    print(f"\n{'='*60}\n🧹 DÉMARRAGE DU NETTOYEUR CHIRURGICAL : {datetime.now().strftime('%H:%M:%S')}\n{'='*60}")
+    parser = argparse.ArgumentParser(description="Nettoyeur J+1 - Observateur Ciel")
+    parser.add_argument(
+        "--bbox",
+        choices=list(SITES.keys()),
+        default="joinville",
+        help=f"Site à nettoyer. Valeurs possibles : {', '.join(SITES.keys())}. Défaut : joinville"
+    )
+    args = parser.parse_args()
+    site = SITES[args.bbox]
+    worksheet_name = site["worksheet"]
+    label = site["label"]
+
+    print(f"\n{'='*60}\n🧹 DÉMARRAGE DU NETTOYEUR CHIRURGICAL ({label}) : {datetime.now().strftime('%H:%M:%S')}\n{'='*60}")
     
     try:
         user, pwd = CONFIG.get("OPENSKY_USER", "").lower(), CONFIG.get("OPENSKY_PWD", "")
-        ws = get_worksheet()
+        ws = get_worksheet(worksheet_name)
         if not ws: 
             print("❌ Impossible d'accéder au Worksheet.")
             return

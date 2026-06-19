@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import warnings
 import logging
+import argparse
 try:
     from curl_cffi import requests as cf_requests
 except ImportError:
@@ -62,7 +63,7 @@ def get_gsheet_client():
         print("❌ Fichier service_account.json introuvable !")
         return None
 
-def get_worksheet():
+def get_worksheet(worksheet_name="Vols_Joinville"):
     client = get_gsheet_client()
     if not client: return None
     try:
@@ -73,13 +74,35 @@ def get_worksheet():
         else:
             sheet_name = CONFIG.get("GOOGLE_SHEET_NAME", "Radar_Joinville")
             sh = client.open(sheet_name)
-        return sh.worksheet("Vols_Joinville")
+        return sh.worksheet(worksheet_name)
     except Exception as e:
         print(f"❌ Erreur accès Google Sheet : {e}")
         return None
 
-BBOX_WATCH = {"lamin": 48.40, "lamax": 49.20, "lomin": 2.00, "lomax": 3.00}
-BBOX_JOINVILLE = {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485}
+# =============================================================================
+# SITES D'OBSERVATION
+# Pour ajouter un site : compléter ce dictionnaire et créer l'onglet GSheets.
+# =============================================================================
+SITES = {
+    "joinville": {
+        "bbox_watch":   {"lamin": 48.40, "lamax": 49.20, "lomin": 2.00, "lomax": 3.00},
+        "bbox_fine":    {"lamin": 48.809, "lamax": 48.828, "lomin": 2.455, "lomax": 2.485},
+        "center":       (48.818, 2.470),
+        "worksheet":    "Vols_Joinville",
+        "label":        "Joinville-le-Pont",
+        "proximity_km": 2.5,
+    },
+    "pessac": {
+        # bbox_watch : zone élargie couvrant l'agglomération bordelaise
+        "bbox_watch":   {"lamin": 44.60, "lamax": 45.10, "lomin": -1.00, "lomax": -0.20},
+        # bbox_fine : zone de capture fine (~2.5 km autour du point d'observation)
+        "bbox_fine":    {"lamin": 44.789, "lamax": 44.839, "lomin": -0.642, "lomax": -0.592},
+        "center":       (44.81385, -0.61735),
+        "worksheet":    "Vols_Pessac",
+        "label":        "Pessac",
+        "proximity_km": 2.5,
+    },
+}
 
 ALTITUDE_MAX = 5000  
 HEARTBEAT_MAX = 180    
@@ -105,13 +128,14 @@ retry = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 5
 adapter = HTTPAdapter(max_retries=retry)
 session.mount("https://", adapter)
 
-def estimate_eta(lat, lon, heading, velocity):
+def estimate_eta(lat, lon, heading, velocity, center, bbox_fine):
+    """Estime le temps en secondes avant qu'un avion atteigne la zone fine du site."""
     if not heading or not velocity or velocity < 5: return None
-    j_lat, j_lon = 48.818, 2.47
-    if BBOX_JOINVILLE["lamin"] <= lat <= BBOX_JOINVILLE["lamax"] and BBOX_JOINVILLE["lomin"] <= lon <= BBOX_JOINVILLE["lomax"]: return 0
-    d_lat, d_lon = j_lat - lat, (j_lon - lon) * math.cos(math.radians(j_lat))
-    bearing_to_j = math.degrees(math.atan2(d_lon, d_lat)) % 360
-    diff = abs(heading - bearing_to_j)
+    c_lat, c_lon = center
+    if bbox_fine["lamin"] <= lat <= bbox_fine["lamax"] and bbox_fine["lomin"] <= lon <= bbox_fine["lomax"]: return 0
+    d_lat, d_lon = c_lat - lat, (c_lon - lon) * math.cos(math.radians(c_lat))
+    bearing_to_c = math.degrees(math.atan2(d_lon, d_lat)) % 360
+    diff = abs(heading - bearing_to_c)
     if diff > 180: diff = 360 - diff 
     if diff < 45:
         dist_m = math.sqrt(d_lat**2 + d_lon**2) * 111000
@@ -278,14 +302,22 @@ def get_opensky_token():
     except: pass
     return None
 
-def run_scan():
+def run_scan(site_config):
+    """Effectue un scan du ciel pour le site donné."""
+    bbox_watch     = site_config["bbox_watch"]
+    bbox_fine      = site_config["bbox_fine"]
+    center         = site_config["center"]
+    worksheet_name = site_config["worksheet"]
+    label          = site_config["label"]
+    c_lat, c_lon   = center
+
     now_dt = datetime.now()
-    print(f"\n{'='*60}\n📡 SCAN DU CIEL : {now_dt.strftime('%d/%m/%Y %H:%M:%S')}\n{'='*60}")
+    print(f"\n{'='*60}\n📡 SCAN DU CIEL ({label}) : {now_dt.strftime('%d/%m/%Y %H:%M:%S')}\n{'='*60}")
     next_sleep, decision_reason = HEARTBEAT_MAX, "Default Heartbeat (3 min)"
     try:
         token = get_opensky_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        url = f"https://opensky-network.org/api/states/all?lamin={BBOX_WATCH['lamin']}&lomin={BBOX_WATCH['lomin']}&lamax={BBOX_WATCH['lamax']}&lomax={BBOX_WATCH['lomax']}"
+        url = f"https://opensky-network.org/api/states/all?lamin={bbox_watch['lamin']}&lomin={bbox_watch['lomin']}&lamax={bbox_watch['lamax']}&lomax={bbox_watch['lomax']}"
         response = session.get(url, headers=headers, timeout=30)
         print(f"💰 CRÉDITS OPENSKY : {response.headers.get('X-Rate-Limit-Remaining', 'Inconnu')}")
         if response.status_code != 200: return next_sleep
@@ -297,16 +329,15 @@ def run_scan():
             lat, lon, heading, velocity, altitude = avion[6], avion[5], avion[10] or 0, avion[9], avion[13] or avion[7] or 0
             if altitude < ALTITUDE_MAX:
                 if altitude < 10 or au_sol: continue
-                j_lat, j_lon = 48.818, 2.47
-                d_lat, d_lon = j_lat - lat, (j_lon - lon) * math.cos(math.radians(j_lat))
-                bearing_to_j = math.degrees(math.atan2(d_lon, d_lat)) % 360
+                d_lat, d_lon = c_lat - lat, (c_lon - lon) * math.cos(math.radians(c_lat))
+                bearing_to_c = math.degrees(math.atan2(d_lon, d_lat)) % 360
                 dist_km = math.sqrt(d_lat**2 + d_lon**2) * 111
-                eta = estimate_eta(lat, lon, heading, velocity)
-                info_nav = f"à {int(altitude)}m - Dist: {dist_km:.1f}km, Cap: {int(heading)}°, Vit: {int((velocity or 0)*3.6)}km/h, Gis: {int(bearing_to_j)}°"
+                eta = estimate_eta(lat, lon, heading, velocity, center, bbox_fine)
+                info_nav = f"à {int(altitude)}m - Dist: {dist_km:.1f}km, Cap: {int(heading)}°, Vit: {int((velocity or 0)*3.6)}km/h, Gis: {int(bearing_to_c)}°"
                 # --- LOGIQUE D'INTERCEPTION AMÉLIORÉE ---
-                is_inside = BBOX_JOINVILLE["lamin"] <= lat <= BBOX_JOINVILLE["lamax"] and \
-                            BBOX_JOINVILLE["lomin"] <= lon <= BBOX_JOINVILLE["lomax"]
-                is_very_near = dist_km < 2.5 
+                is_inside = bbox_fine["lamin"] <= lat <= bbox_fine["lamax"] and \
+                            bbox_fine["lomin"] <= lon <= bbox_fine["lomax"]
+                is_very_near = dist_km < site_config.get("proximity_km", 2.5)
 
                 if is_inside or is_very_near:
                     status = "[ZONE]" if is_inside else "[PROXIMITÉ]"
@@ -324,7 +355,7 @@ def run_scan():
             else: print(f"  ☁️ [TROP HAUT] {callsign} à {int(altitude)}m - Ignoré")
 
         if candidates:
-            ws = get_worksheet()
+            ws = get_worksheet(worksheet_name)
             if not ws: return next_sleep
             
             # 1. Lecture native via gspread
@@ -376,7 +407,7 @@ def run_scan():
                                         row["Altitude (m)"] = altitude
                                 except: pass
                                 
-                                # NOTE: On ne change PAS Lat, Lon, Heading pour garder l'avion au-dessus de Joinville
+                                # NOTE: On ne change PAS Lat, Lon, Heading pour garder l'avion au-dessus de la zone
                                 # Mais on met à jour la tendance et l'état brut
                                 row["Evolution Verticale"] = trend
                                 row["OpenSky State Info"] = json.dumps(avion, ensure_ascii=False)
@@ -472,10 +503,20 @@ def run_scan():
     return next_sleep
 
 def main():
-    print("=====================================================\nDÉMARRAGE DU RADAR PRÉDICTIF INFINI (JOINVILLE)\n=====================================================")
+    parser = argparse.ArgumentParser(description="Radar Observateur Ciel - collecteur infini")
+    parser.add_argument(
+        "--bbox",
+        choices=list(SITES.keys()),
+        default="joinville",
+        help=f"Site à observer. Valeurs possibles : {', '.join(SITES.keys())}. Défaut : joinville"
+    )
+    args = parser.parse_args()
+    site_config = SITES[args.bbox]
+    print(f"=====================================================\nDÉMARRAGE DU RADAR PRÉDICTIF INFINI ({site_config['label'].upper()})\n=====================================================")
     while True:
-        wait_time = run_scan()
+        wait_time = run_scan(site_config)
         time.sleep(wait_time)
 
 if __name__ == "__main__":
     main()
+

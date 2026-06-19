@@ -4,7 +4,7 @@ import pydeck as pdk
 import json
 from streamlit_gsheets import GSheetsConnection
 
-st.set_page_config(page_title="Radar Joinville", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="Observateur du Ciel", page_icon="✈️", layout="wide")
 
 # Style CSS personnalisé
 st.markdown("""
@@ -15,13 +15,36 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("✈️ Survols à basse altitude - Joinville-le-Pont")
-st.markdown("Surveillance citoyenne. Sources : OpenSky, HexDB, AirLabs.")
+# =============================================================================
+# CONFIGURATION DES SITES D'OBSERVATION
+# =============================================================================
+SITES = {
+    "Joinville-le-Pont": {
+        "worksheet":   "Vols_Joinville",
+        "center":      {"lat": 48.8230, "lon": 2.4736},
+        "description": "Surveillance citoyenne des survols à basse altitude autour de **Joinville-le-Pont**. Sources : OpenSky, HexDB, AirLabs.",
+        "zoom":        13.5,
+    },
+    "Pessac": {
+        "worksheet":   "Vols_Pessac",
+        "center":      {"lat": 44.81385, "lon": -0.61735},
+        "description": "Surveillance citoyenne des survols à basse altitude autour de **Pessac**. Sources : OpenSky, HexDB, AirLabs.",
+        "zoom":        13.5,
+    },
+}
 
-# Connexion
+# --- Sélecteur de site (défini avant tout chargement de données) ---
+st.sidebar.header("🌍 Site d'observation")
+selected_site_name = st.sidebar.selectbox("Choisir un site", list(SITES.keys()), key="site_selector")
+site = SITES[selected_site_name]
+
+st.title(f"✈️ Survols à basse altitude - {selected_site_name}")
+st.markdown(site["description"])
+
+# Connexion — onglet dynamique selon le site sélectionné
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(worksheet="Vols_Joinville", ttl=0)
+    df = conn.read(worksheet=site["worksheet"], ttl=0)
 except Exception as e:
     st.error(f"Erreur connexion : {e}")
     st.stop()
@@ -38,7 +61,7 @@ else:
 
     # 2. Sidebar et Filtres
     st.sidebar.header("🗓️ Filtres")
-    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date'].unique(), reverse=True))
+    jour_choisi = st.sidebar.selectbox("Journée", sorted(df['Date'].unique(), reverse=True), key="jour_selector")
     if st.sidebar.button("🔄 Actualiser"): st.rerun()
     
     df_jour = df[df['Date'] == jour_choisi].copy().reset_index(drop=True)
@@ -88,13 +111,13 @@ else:
 
     map_df['size'] = map_df.apply(set_map_size, axis=1)
 
-    # État de la vue
-    JOINVILLE_CENTER = {"lat": 48.8230, "lon": 2.4736}
+    # État de la vue — centre dynamique selon le site
+    SITE_CENTER = site["center"]
     has_coords = (selected_row is not None and not pd.isna(selected_row['Lat']) and not pd.isna(selected_row['Lon']))
     view_state = pdk.ViewState(
-        latitude=selected_row['Lat'] if has_coords else JOINVILLE_CENTER["lat"],
-        longitude=selected_row['Lon'] if has_coords else JOINVILLE_CENTER["lon"],
-        zoom=13.5,
+        latitude=selected_row['Lat'] if has_coords else SITE_CENTER["lat"],
+        longitude=selected_row['Lon'] if has_coords else SITE_CENTER["lon"],
+        zoom=site["zoom"],
         pitch=0,
     )
     
