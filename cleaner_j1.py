@@ -12,6 +12,39 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 from curl_cffi import requests as cf_requests
 import pytz
+from utils_aircraft import get_aircraft_info
+
+def format_coord(val, col_name):
+    if val is None or str(val).strip() == "":
+        return ""
+    val_str = str(val).strip()
+    
+    # Gestion du signe négatif éventuel (ex: longitudes Pessac)
+    is_neg = False
+    if val_str.startswith("-"):
+        is_neg = True
+        val_str = val_str[1:]
+        
+    # Détection et correction des entiers corrompus (ex: 488158 au lieu de 48,8158)
+    if val_str.isdigit() and len(val_str) >= 5:
+        if col_name == "Lat":
+            # Toujours 2 chiffres avant la virgule pour la France (48.xx ou 44.xx)
+            val_str = val_str[:2] + "," + val_str[2:]
+        elif col_name == "Lon":
+            # Joinville: 2.xxxx (commence par 2), Pessac: -0.xxxx (commence par 0 sans le signe)
+            if val_str.startswith("2") or val_str.startswith("0"):
+                val_str = val_str[0] + "," + val_str[1:]
+            else:
+                val_str = val_str[:2] + "," + val_str[2:]
+                
+    if is_neg:
+        val_str = "-" + val_str
+        
+    try:
+        f_val = float(val_str.replace(",", "."))
+        return f"{f_val:.4f}".replace(".", ",")
+    except:
+        return val_str
 
 # ---------------------------------------------------------------------------
 # Configuration & SECRETS
@@ -282,16 +315,22 @@ def main():
                     
                     def set_val(name, val):
                         if name in col_map: 
-                            # Si c'est un nombre, on s'assure du format virgule pour GSheets
-                            if name in ["Lat", "Lon"] and val:
-                                try:
-                                    f_val = float(str(val).replace(",", "."))
-                                    new_row[col_map[name]] = f"{f_val:.4f}".replace(".", ",")
-                                except: new_row[col_map[name]] = val
+                            if name in ["Lat", "Lon"]:
+                                new_row[col_map[name]] = format_coord(val, name)
                             elif isinstance(val, float):
                                 new_row[col_map[name]] = f"{val}".replace(".", ",")
                             else:
                                 new_row[col_map[name]] = val
+
+                    # Correction de l'immatriculation si corrompue (ex: 3.99E+63 ou 3,99E+63) ou absente
+                    current_immat = get_val("Immatriculation")
+                    is_corrupt_immat = "E+" in current_immat.upper() or "E-" in current_immat.upper()
+                    if (not current_immat or is_corrupt_immat) and icao:
+                        try:
+                            _, _, real_reg, _ = get_aircraft_info(icao)
+                            if real_reg and real_reg != "Inconnu" and "E+" not in real_reg.upper() and "E-" not in real_reg.upper():
+                                set_val("Immatriculation", real_reg)
+                        except: pass
 
                     set_val("De", resolve_airport(dep))
                     set_val("A", resolve_airport(arr) if arr else "Inconnu")
@@ -306,8 +345,13 @@ def main():
                     for idx, val in enumerate(new_row):
                         col_name = header[idx]
                         if col_name in ["Lat", "Lon"]:
-                             if val and "," not in str(val) and "." in str(val):
-                                 new_row[idx] = str(val).replace(".", ",")
+                            new_row[idx] = format_coord(val, col_name)
+                        elif col_name in ["Identifiant Vol (Callsign)", "Immatriculation", "Identifiant Appareil (ICAO24)"]:
+                            val_str = str(val).strip()
+                            if val_str and not val_str.startswith("'"):
+                                new_row[idx] = "'" + val_str
+                            else:
+                                new_row[idx] = val_str
                         elif isinstance(val, float):
                              new_row[idx] = str(val).replace(".", ",")
 

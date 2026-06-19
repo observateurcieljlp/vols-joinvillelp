@@ -147,6 +147,38 @@ def clean(v) -> str:
     s = str(v).strip() if v is not None else ""
     return "" if s.lower() in INVALIDES else s
 
+def format_coord(val, col_name):
+    if val is None or str(val).strip() == "":
+        return ""
+    val_str = str(val).strip()
+    
+    # Gestion du signe négatif éventuel (ex: longitudes Pessac)
+    is_neg = False
+    if val_str.startswith("-"):
+        is_neg = True
+        val_str = val_str[1:]
+        
+    # Détection et correction des entiers corrompus (ex: 488158 au lieu de 48,8158)
+    if val_str.isdigit() and len(val_str) >= 5:
+        if col_name == "Lat":
+            # Toujours 2 chiffres avant la virgule pour la France (48.xx ou 44.xx)
+            val_str = val_str[:2] + "," + val_str[2:]
+        elif col_name == "Lon":
+            # Joinville: 2.xxxx (commence par 2), Pessac: -0.xxxx (commence par 0 sans le signe)
+            if val_str.startswith("2") or val_str.startswith("0"):
+                val_str = val_str[0] + "," + val_str[1:]
+            else:
+                val_str = val_str[:2] + "," + val_str[2:]
+                
+    if is_neg:
+        val_str = "-" + val_str
+        
+    try:
+        f_val = float(val_str.replace(",", "."))
+        return f"{f_val:.4f}".replace(".", ",")
+    except:
+        return val_str
+
 def get_flight_airlabs(icao24: str) -> dict | None:
     try:
         api_key = CONFIG.get("AIRLABS_API_KEY", "")
@@ -466,12 +498,16 @@ def run_scan(site_config):
                             val = row_dict.get(c, "")
                             if val is None or (isinstance(val, float) and (val != val or val == float('inf') or val == float('-inf'))):
                                 formatted.append("")
-                            elif isinstance(val, float):
-                                # Alignement sur le Cleaner : Virgule + Precision 4 pour Lat/Lon
-                                if c in ["Lat", "Lon"]:
-                                    formatted.append(f"{val:.4f}".replace(".", ","))
+                            elif c in ["Lat", "Lon"]:
+                                formatted.append(format_coord(val, c))
+                            elif c in ["Identifiant Vol (Callsign)", "Immatriculation", "Identifiant Appareil (ICAO24)"]:
+                                val_str = str(val).strip()
+                                if val_str and not val_str.startswith("'"):
+                                    formatted.append("'" + val_str)
                                 else:
-                                    formatted.append(f"{val}".replace(".", ","))
+                                    formatted.append(val_str)
+                            elif isinstance(val, float):
+                                formatted.append(f"{val}".replace(".", ","))
                             else:
                                 formatted.append(val)
                         return formatted
