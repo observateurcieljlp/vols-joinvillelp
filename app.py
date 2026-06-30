@@ -33,10 +33,27 @@ SITES = {
     },
 }
 
+# --- Récupération du site via l'URL (ex: ?site=pessac) ---
+default_index = 0
+if "site" in st.query_params:
+    param_site = st.query_params["site"].lower()
+    for i, name in enumerate(SITES.keys()):
+        if name.lower().startswith(param_site):
+            default_index = i
+            break
+
 # --- Sélecteur de site (défini avant tout chargement de données) ---
 st.sidebar.header("🌍 Site d'observation")
-selected_site_name = st.sidebar.selectbox("Choisir un site", list(SITES.keys()), key="site_selector")
+selected_site_name = st.sidebar.selectbox(
+    "Choisir un site", 
+    list(SITES.keys()), 
+    index=default_index, 
+    key="site_selector"
+)
 site = SITES[selected_site_name]
+
+# Mettre à jour l'URL avec le site sélectionné
+st.query_params["site"] = selected_site_name.lower().split("-")[0]
 
 st.title(f"✈️ Survols à basse altitude - {selected_site_name}")
 st.markdown(site["description"])
