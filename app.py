@@ -29,7 +29,7 @@ SITES = {
         "worksheet":   "Vols_Pessac",
         "center":      {"lat": 44.81385, "lon": -0.61735},
         "description": "Surveillance citoyenne des survols à basse altitude autour de **Pessac**. Sources : OpenSky, HexDB, AirLabs.",
-        "zoom":        13.5,
+        "zoom":        13.0,
     },
 }
 
