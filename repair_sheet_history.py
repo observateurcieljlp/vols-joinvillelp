@@ -54,14 +54,27 @@ def format_coord(val, col_name):
         is_neg = True
         val_str = val_str[1:]
         
-    if val_str.isdigit() and len(val_str) >= 5:
-        if col_name == "Lat":
+    if val_str.isdigit():
+        if col_name == "Lat" and len(val_str) >= 5:
             val_str = val_str[:2] + "," + val_str[2:]
-        elif col_name == "Lon":
-            if val_str.startswith("2") or val_str.startswith("0"):
-                val_str = val_str[0] + "," + val_str[1:]
+        elif col_name == "Lon" and len(val_str) >= 4:
+            if is_neg:
+                # Pessac : longitude négative entre -1.0 et -0.2
+                # Si le 0 initial a été perdu lors de la conversion en entier (ex: -6024 au lieu de -0.6024)
+                if val_str.startswith("1"):
+                    val_str = "1," + val_str[1:]
+                elif val_str.startswith("0"):
+                    val_str = "0," + val_str[1:]
+                else:
+                    # Le 0 a été perdu, on le rajoute (ex: 6024 -> 0,6024)
+                    val_str = "0," + val_str
             else:
-                val_str = val_str[:2] + "," + val_str[2:]
+                # Joinville : longitude positive autour de 2.xxxx
+                if len(val_str) >= 5:
+                    if val_str.startswith("2") or val_str.startswith("0"):
+                        val_str = val_str[0] + "," + val_str[1:]
+                    else:
+                        val_str = val_str[:2] + "," + val_str[2:]
                 
     if is_neg:
         val_str = "-" + val_str
